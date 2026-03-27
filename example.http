@@ -1,0 +1,36 @@
+### List all stocks
+GET http://127.0.0.1:8000/stocks
+
+### Create a stock
+POST http://127.0.0.1:8000/stocks
+Content-Type: application/json
+
+{
+  "symbol": "AAPL",
+  "company_name": "Apple Inc.",
+  "sector": "Technology",
+  "target_price": 210.5,
+  "personal_score": 9,
+  "thesis": "Strong ecosystem and recurring revenue.",
+  "is_favorite": true
+}
+
+### Get a stock by id
+GET http://127.0.0.1:8000/stocks/1
+
+### Update a stock
+PUT http://127.0.0.1:8000/stocks/1
+Content-Type: application/json
+
+{
+  "symbol": "MSFT",
+  "company_name": "Microsoft Corporation",
+  "sector": "Technology",
+  "target_price": 455.0,
+  "personal_score": 10,
+  "thesis": "Cloud growth and diversified business lines.",
+  "is_favorite": false
+}
+
+### Delete a stock
+DELETE http://127.0.0.1:8000/stocks/1
