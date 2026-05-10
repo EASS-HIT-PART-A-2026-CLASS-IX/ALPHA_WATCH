@@ -125,3 +125,42 @@ def test_create_stock_with_negative_target_price_returns_422() -> None:
     response = client.post("/stocks", json=invalid_payload)
 
     assert response.status_code == 422
+
+
+def test_lookup_stock_company(monkeypatch: pytest.MonkeyPatch) -> None:
+    class FakeResponse:
+        def raise_for_status(self) -> None:
+            pass
+
+        def json(self) -> dict:
+            return {
+                "Symbol": "TSLA",
+                "Name": "Tesla, Inc.",
+                "Sector": "Consumer Cyclical",
+            }
+
+    def fake_get(*args, **kwargs) -> FakeResponse:
+        return FakeResponse()
+
+    monkeypatch.setenv("ALPHAVANTAGE_API_KEY", "test-key")
+    monkeypatch.setattr("app.company_lookup.requests.get", fake_get)
+
+    response = client.get("/stocks/lookup/tsla")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "symbol": "TSLA",
+        "company_name": "Tesla, Inc.",
+        "sector": "Consumer Cyclical",
+    }
+
+
+def test_lookup_stock_company_without_api_key_returns_503(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("ALPHAVANTAGE_API_KEY", raising=False)
+
+    response = client.get("/stocks/lookup/TSLA")
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "ALPHAVANTAGE_API_KEY is not configured"

@@ -37,3 +37,9 @@ class StockRead(BaseModel):
     personal_score: int
     thesis: str
     is_favorite: bool
+
+
+class CompanyLookupRead(BaseModel):
+    symbol: str
+    company_name: str
+    sector: str
