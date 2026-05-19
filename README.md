@@ -1,92 +1,157 @@
-# AlphaWatch
+# AlphaWatch 📈
 
-AlphaWatch is a small local app for managing a personal stock watchlist.
+A personal stock watchlist application with a FastAPI backend, SQLite persistence, JWT authentication, and a Streamlit dashboard.
 
-EX1 includes a FastAPI backend with in-memory storage, Pydantic validation, and pytest-based API tests.
+---
 
-EX2 adds a lightweight Streamlit interface that talks to the same FastAPI backend. The interface lets users quickly add a stock, list the current watchlist, auto-fill basic company information, and view a small summary at the top of the page.
+## What's in this phase (EX3)
 
-## Create an Environment with `uv`
+- SQLite database via SQLModel (replaces in-memory storage)
+- User registration and login
+- Password hashing with bcrypt
+- JWT-based authentication (Bearer token)
+- Every stock belongs to a specific user — full data isolation
+- Role field on users (`user` / `admin`) with a protected admin route
+- Four market-data stub endpoints ready for future integration
+- Full pytest suite: auth flows, CRUD, user isolation, role checks
+
+---
+
+## Quick Start
+
+### 1. Install dependencies
 
 ```bash
-uv venv
-```
-
-## Install Dependencies
-
-```bash
+# with uv (recommended)
 uv pip install -e ".[dev]"
+
+# or with pip
+pip install -e ".[dev]"
 ```
 
-## Configure Company Lookup
-
-The backend can use Alpha Vantage to look up basic company information by stock symbol.
-
-Create a free API key at `https://www.alphavantage.co/support/#api-key`, then set it in your terminal:
+### 2. Run the FastAPI backend
 
 ```bash
-export ALPHAVANTAGE_API_KEY="your-api-key-here"
+uvicorn app.main:app --reload
 ```
 
-The Streamlit frontend does not call Alpha Vantage directly. It only calls the local FastAPI backend.
+- API: `http://127.0.0.1:8000`
+- Interactive docs: `http://127.0.0.1:8000/docs`
 
-## Run the API Locally
+The SQLite database file (`alphawatch.db`) is created automatically on first run.
 
-In the first terminal, run:
+### 3. Run the Streamlit frontend
+
+Open a second terminal:
 
 ```bash
-uv run uvicorn app.main:app --reload
+streamlit run ui/streamlit_app.py
 ```
 
-The API will be available at `http://127.0.0.1:8000`.
+The app opens at `http://localhost:8501`. Register an account on first visit.
 
-## Run the Streamlit Interface
-
-In a second terminal, run:
+### 4. (Optional) Configure secrets and features
 
 ```bash
-uv run streamlit run ui/streamlit_app.py
+# Required for the company auto-fill feature
+export ALPHAVANTAGE_API_KEY=your_key_here
+
+# Override the JWT secret in production
+export SECRET_KEY=a-long-random-string-here
 ```
 
-The Streamlit app will open in your browser. Keep the FastAPI backend and the Streamlit interface running side-by-side in two terminals.
+---
 
-## Run Tests
+## Project Structure
+
+```
+ALPHA_WATCH/
+├── app/
+│   ├── main.py            # FastAPI app entry point (lifespan → init_db)
+│   ├── database.py        # SQLite engine, session dependency, init_db
+│   ├── models.py          # SQLModel table models: User, Stock
+│   ├── auth.py            # bcrypt hashing, JWT creation/validation, dependencies
+│   ├── schemas.py         # Pydantic request/response schemas
+│   ├── auth_routes.py     # /auth/register, /auth/login, /auth/me, /auth/admin/users
+│   ├── routes.py          # /stocks CRUD (protected, per-user)
+│   ├── market_routes.py   # /market stubs (profile, quote, history, news)
+│   └── company_lookup.py  # Alpha Vantage integration (unchanged)
+├── ui/
+│   └── streamlit_app.py   # Streamlit multi-page frontend with auth gate
+├── tests/
+│   ├── conftest.py        # In-memory SQLite fixture, TestClient setup
+│   ├── test_auth.py       # Registration, login, token, role tests
+│   └── test_stocks.py     # CRUD + user isolation tests
+├── pyproject.toml
+└── README.md
+```
+
+---
+
+## API Endpoints
+
+### Auth
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `POST` | `/auth/register` | — | Create a new account |
+| `POST` | `/auth/login` | — | Get a JWT token (form: username + password) |
+| `GET` | `/auth/me` | ✓ | Current user info |
+| `GET` | `/auth/admin/users` | admin | List all users |
+
+### Stocks
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `GET` | `/stocks` | ✓ | List your stocks |
+| `POST` | `/stocks` | ✓ | Add a stock |
+| `GET` | `/stocks/{id}` | ✓ | Get one stock |
+| `PUT` | `/stocks/{id}` | ✓ | Update a stock |
+| `DELETE` | `/stocks/{id}` | ✓ | Delete a stock |
+| `GET` | `/stocks/lookup/{symbol}` | ✓ | Auto-fill via Alpha Vantage |
+
+### Market (stubs for next phase)
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/market/profile/{symbol}` | Company profile |
+| `GET` | `/market/quote/{symbol}` | Live quote |
+| `GET` | `/market/history/{symbol}` | Price history |
+| `GET` | `/market/news/{symbol}` | News feed |
+
+---
+
+## Auth Flow
+
+1. `POST /auth/register` with `{"email": "...", "password": "..."}` → creates account
+2. `POST /auth/login` with form fields `username` + `password` → returns `access_token`
+3. Pass the token as `Authorization: Bearer <token>` on every protected request
+4. Token expires after 60 minutes (configurable via `ACCESS_TOKEN_EXPIRE_MINUTES`)
+
+---
+
+## Dashboard Pages
+
+| Page | Description |
+|------|-------------|
+| **Login / Register** | Auth gate shown before access |
+| **Dashboard** | Metrics, sector distribution chart, personal score chart |
+| **Add Stock** | Form with optional Alpha Vantage auto-fill |
+| **Watchlist** | Table with filter by sector/favorites, sort, delete |
+| **Stock Details** | Detail view, charts, edit form |
+
+---
+
+## Running Tests
 
 ```bash
-uv run pytest
+pytest tests/
 ```
 
-## Endpoints
+Tests use an in-memory SQLite database — no file created, no cleanup needed.
 
-- `GET /stocks`
-- `GET /stocks/lookup/{symbol}`
-- `GET /stocks/{stock_id}`
-- `POST /stocks`
-- `PUT /stocks/{stock_id}`
-- `DELETE /stocks/{stock_id}`
-
-## EX2 Interface
-
-The Streamlit interface uses `requests` to call the local FastAPI backend at `http://127.0.0.1:8000`.
-
-For company auto-fill, Streamlit calls `GET /stocks/lookup/{symbol}` on the local backend. The backend then calls Alpha Vantage and returns only the basic fields needed by the UI:
-
-- `symbol`
-- `company_name`
-- `sector`
-
-From the interface, users can:
-
-- add a new stock with symbol, company name, sector, target price, personal score, thesis, and favorite status
-- enter a ticker symbol and click `Auto-fill company info`
-- list all stocks currently stored by the backend
-- refresh the table after changes
-- see summary metrics for total stocks, total favorites, and average personal score
-
-The user still manually fills target price, personal score, thesis, and favorite status.
-
-The extra EX2 feature is the summary metrics section at the top of the page. The company auto-fill is a small convenience feature that keeps the backend as the center of the system.
+---
 
 ## AI Assistance
 
-AI tools were used for planning, scaffolding, and extending this project for EX2. All generated outputs were reviewed and tested locally.
+This project was developed with assistance from Claude (Anthropic). AI was used for architecture decisions, code generation, and documentation. All generated outputs were reviewed, tested locally, and adapted for the project's requirements.
