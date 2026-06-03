@@ -1,4 +1,4 @@
-from typing import Annotated
+from typing import Annotated, Optional
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, StringConstraints
 
@@ -6,7 +6,7 @@ StockSymbol = Annotated[str, StringConstraints(strip_whitespace=True, to_upper=T
 NonEmptyText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 
 
-# ── Stock schemas (unchanged from EX2) ──────────────────────────────────────
+# ── Stock schemas ─────────────────────────────────────────────────────────────
 
 class StockCreate(BaseModel):
     symbol: StockSymbol
@@ -47,7 +47,7 @@ class CompanyLookupRead(BaseModel):
     sector: str
 
 
-# ── Auth schemas ─────────────────────────────────────────────────────────────
+# ── Auth schemas ──────────────────────────────────────────────────────────────
 
 class UserCreate(BaseModel):
     email: EmailStr
@@ -65,3 +65,45 @@ class UserRead(BaseModel):
 class Token(BaseModel):
     access_token: str
     token_type: str
+
+
+# ── Market schemas ────────────────────────────────────────────────────────────
+
+class MarketProfileRead(BaseModel):
+    symbol: str
+    company_name: str
+    sector: str
+    industry: str
+    description: str
+    market_cap: Optional[int] = None
+
+
+class MarketQuoteRead(BaseModel):
+    symbol: str
+    price: float
+    change: float
+    change_percent: float
+    previous_close: Optional[float] = None
+
+
+class HistoryPoint(BaseModel):
+    date: str    # "YYYY-MM-DD"
+    close: float
+
+
+class MarketHistoryRead(BaseModel):
+    symbol: str
+    series: list[HistoryPoint]
+
+
+class NewsItem(BaseModel):
+    title: str
+    source: str
+    published_at: str
+    url: str
+    summary: Optional[str] = None
+
+
+class MarketNewsRead(BaseModel):
+    symbol: str
+    items: list[NewsItem]

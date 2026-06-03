@@ -4,7 +4,7 @@ A personal stock watchlist application built with FastAPI, SQLite, JWT authentic
 
 ---
 
-## What is implemented (EX3 Foundation)
+## What is implemented
 
 | Feature | Status |
 |---|---|
@@ -14,12 +14,14 @@ A personal stock watchlist application built with FastAPI, SQLite, JWT authentic
 | JWT Bearer token auth | ✅ |
 | Per-user stock isolation | ✅ |
 | Role field (`user` / `admin`) | ✅ |
-| Admin-only route (`GET /auth/admin/users`) | ✅ |
-| Full stock CRUD (create, read, update, delete) | ✅ |
-| Company auto-fill via Alpha Vantage | ✅ (requires API key) |
-| Market data stub endpoints | ✅ (stubs, not yet integrated) |
-| Streamlit dashboard with login/register | ✅ |
-| pytest suite (auth, CRUD, isolation, roles) | ✅ |
+| Admin-only route | ✅ |
+| Full stock CRUD | ✅ |
+| Company auto-fill via Alpha Vantage | ✅ |
+| Real market profile endpoint | ✅ |
+| Real live quote endpoint | ✅ |
+| Real price history endpoint | ✅ |
+| Real news endpoint | ✅ |
+| Stock Details page in Streamlit | ✅ |
 
 ---
 
@@ -28,48 +30,41 @@ A personal stock watchlist application built with FastAPI, SQLite, JWT authentic
 ### 1. Install dependencies
 
 ```bash
-# recommended: uv
-uv pip install -e ".[dev]"
-
-# or plain pip
 pip install -e ".[dev]"
+# or with uv:
+uv pip install -e ".[dev]"
 ```
 
-> `email-validator` is included in the dependencies and is required for the
-> registration endpoint to validate email addresses correctly.
+### 2. Configure API keys
 
-### 2. Run the FastAPI backend
+Market data is powered by [Alpha Vantage](https://www.alphavantage.co/support/#api-key) (free tier, no credit card).
+
+```bash
+export ALPHAVANTAGE_API_KEY=your_key_here
+export SECRET_KEY=a-long-random-string-here   # JWT secret — change in production
+```
+
+> Without `ALPHAVANTAGE_API_KEY`, stock CRUD and auth still work fully.
+> Market data endpoints return a clear 503 with an explanatory message.
+
+### 3. Run the FastAPI backend
 
 ```bash
 uvicorn app.main:app --reload
 ```
 
-- API root: `http://127.0.0.1:8000`
+- API: `http://127.0.0.1:8000`
 - Interactive docs: `http://127.0.0.1:8000/docs`
 
-The SQLite database file (`alphawatch.db`) is created automatically on first
-run and is excluded from version control via `.gitignore`.
+The SQLite database (`alphawatch.db`) is created automatically on first run.
 
-### 3. Run the Streamlit frontend
-
-Open a second terminal:
+### 4. Run the Streamlit frontend
 
 ```bash
 streamlit run ui/streamlit_app.py
 ```
 
-The UI opens at `http://localhost:8501`. Register a new account on first visit,
-then log in to access your personal watchlist.
-
-### 4. (Optional) Set environment variables
-
-```bash
-# Required for the company symbol auto-fill feature
-export ALPHAVANTAGE_API_KEY=your_key_here
-
-# Override the JWT signing secret in production (strongly recommended)
-export SECRET_KEY=a-long-random-string-here
-```
+Opens at `http://localhost:8501`. Register an account on first visit.
 
 ---
 
@@ -83,13 +78,8 @@ POST /auth/login      form-data: username=... password=...
   → 200 { "access_token": "<jwt>", "token_type": "bearer" }
 
 GET  /auth/me         Authorization: Bearer <jwt>
-  → 200 { "id": 1, "email": "...", "role": "user" }
-
-GET  /auth/admin/users   Authorization: Bearer <admin-jwt>
-  → 200 [ ... ]   (403 if caller is not an admin)
+GET  /auth/admin/users   (admin role required → 403 otherwise)
 ```
-
-All `/stocks` and `/market` endpoints require a valid Bearer token.
 
 ---
 
@@ -104,20 +94,53 @@ All `/stocks` and `/market` endpoints require a valid Bearer token.
 | `DELETE` | `/stocks/{id}` | Delete a stock |
 | `GET` | `/stocks/lookup/{symbol}` | Auto-fill company info |
 
-Each user can only see and modify their own stocks.
+---
+
+## Market data endpoints
+
+All endpoints require a valid Bearer token and `ALPHAVANTAGE_API_KEY`.
+
+| Path | Returns |
+|---|---|
+| `GET /market/profile/{symbol}` | symbol, company_name, sector, industry, description, market_cap |
+| `GET /market/quote/{symbol}` | price, change, change_percent, previous_close |
+| `GET /market/history/{symbol}` | 30-day daily close price series (ascending, ready to chart) |
+| `GET /market/news/{symbol}` | up to 10 recent news items (title, source, published_at, url, summary) |
+
+### Error responses
+
+| Situation | HTTP status |
+|---|---|
+| `ALPHAVANTAGE_API_KEY` not set | 503 Service Unavailable |
+| Symbol not found / no data | 404 Not Found |
+| Alpha Vantage request failed | 502 Bad Gateway |
 
 ---
 
-## Market data stubs (future phases)
+## Stock Details page
 
-These endpoints are authenticated and wired up — ready for real integrations:
+Click **🔍 Details** on any watchlist entry. The page shows:
 
-| Path | Future purpose |
+- Your personal notes: target price, score, thesis, favorite status
+- Live quote with price and daily change/percent
+- Company profile: description, market cap, industry
+- 30-day price chart (line chart, pandas + Streamlit)
+- Latest news feed with clickable headlines
+
+---
+
+## Provider limitations (Alpha Vantage free tier)
+
+| Limit | Value |
 |---|---|
-| `GET /market/profile/{symbol}` | Company overview |
-| `GET /market/quote/{symbol}` | Live price quote |
-| `GET /market/history/{symbol}` | Price history |
-| `GET /market/news/{symbol}` | News / sentiment feed |
+| Requests per day | 25 |
+| Requests per minute | 5 |
+| Quote freshness | ~15–20 min delayed |
+| News | Recent articles only, no full-text |
+
+Opening the Stock Details page makes up to 4 API calls (profile, quote, history, news).
+With a free key and 25 calls/day, opening ~6 stock detail pages will exhaust the daily limit.
+Upgrade to a paid Alpha Vantage key for production use.
 
 ---
 
@@ -127,20 +150,16 @@ These endpoints are authenticated and wired up — ready for real integrations:
 pytest
 ```
 
-Tests use an isolated in-memory SQLite database — the `alphawatch.db` file is
-never touched.
+All external API calls are mocked — no API key or network access required.
 
 ### What is tested
 
-- Registration: success, duplicate email, short password
-- Login: success, wrong password, unknown email
-- Protected routes: no token, expired token, malformed token
-- Admin route: regular user gets 403, admin gets 200
-- `/auth/me` returns the current user
-- Stock CRUD: create, read, update, delete, 404 cases
-- User isolation: users cannot see or modify each other's stocks
-- Two users can hold the same symbol without conflict
-- Company lookup: mocked API response, missing API key → 503
+- Auth: registration, login, protected routes, expired tokens, role checks
+- Stock CRUD: create, read, update, delete, isolation between users
+- Market profile: success, 404 for unknown symbol, 503 for missing key, 401 without token
+- Market quote: success, 404 for unknown symbol, 503 for missing key, 401 without token
+- Market history: success, correct ascending order, 404, 503, 401
+- Market news: success, empty feed, 503, 401
 
 ---
 
@@ -149,21 +168,22 @@ never touched.
 ```
 ALPHA_WATCH/
 ├── app/
-│   ├── auth.py           # password hashing, JWT encode/decode, dependency helpers
-│   ├── auth_routes.py    # /auth/register, /auth/login, /auth/me, /auth/admin/users
-│   ├── company_lookup.py # Alpha Vantage OVERVIEW wrapper
-│   ├── database.py       # SQLite engine, get_session, init_db
-│   ├── main.py           # FastAPI app + lifespan startup hook
-│   ├── market_routes.py  # /market/* stub endpoints for future integration
-│   ├── models.py         # SQLModel tables: User, Stock
-│   ├── routes.py         # /stocks CRUD (per-user isolation)
-│   └── schemas.py        # Pydantic v2 request/response schemas
+│   ├── auth.py              # bcrypt hashing, JWT encode/decode, dependency helpers
+│   ├── auth_routes.py       # /auth/register, /auth/login, /auth/me, /auth/admin/users
+│   ├── company_lookup.py    # Alpha Vantage OVERVIEW — used by both /stocks/lookup and /market/profile
+│   ├── database.py          # SQLite engine, get_session, init_db
+│   ├── main.py              # FastAPI app + lifespan startup hook
+│   ├── market_routes.py     # /market/profile, /quote, /history, /news — real integrations
+│   ├── models.py            # SQLModel tables: User, Stock
+│   ├── routes.py            # /stocks CRUD (per-user isolation)
+│   └── schemas.py           # Pydantic v2 schemas: stock, auth, market
 ├── tests/
-│   ├── conftest.py       # in-memory DB fixture + TestClient override
-│   ├── test_auth.py      # auth flow tests
-│   └── test_stocks.py    # CRUD + isolation tests
+│   ├── conftest.py          # in-memory DB fixture + TestClient override
+│   ├── test_auth.py
+│   ├── test_stocks.py
+│   └── test_market.py       # mocked tests for all 4 market endpoints
 ├── ui/
-│   └── streamlit_app.py  # login/register + personal watchlist dashboard
+│   └── streamlit_app.py     # login/register + watchlist + stock details dashboard
 ├── .gitignore
 ├── pyproject.toml
 └── README.md
@@ -173,11 +193,11 @@ ALPHA_WATCH/
 
 ## AI Assistance
 
-GitHub Copilot and Claude (Anthropic) were used during development for:
+Claude (Anthropic) and GitHub Copilot were used during development for:
 
-- Drafting boilerplate for SQLModel table definitions and Pydantic schemas
-- Suggesting the `lifespan` pattern for FastAPI startup hooks
-- Generating the pytest fixture structure for in-memory database isolation
-- Reviewing bcrypt / JWT integration for common pitfalls
+- Drafting Alpha Vantage response parsing logic for quote, history, and news
+- Structuring Pydantic response schemas for market data
+- Generating mocked pytest fixtures for external API tests
+- Streamlit layout and error handling for the Stock Details page
 
-All generated code was reviewed, understood, and adapted before being committed.
+All generated code was reviewed, understood, and adapted before committing.

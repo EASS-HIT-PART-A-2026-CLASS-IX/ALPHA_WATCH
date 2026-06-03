@@ -11,56 +11,80 @@ def _auth_headers() -> dict:
 
 
 def list_stocks() -> list[dict]:
-    response = requests.get(f"{API_BASE_URL}/stocks", headers=_auth_headers(), timeout=5)
-    response.raise_for_status()
-    return response.json()
+    r = requests.get(f"{API_BASE_URL}/stocks", headers=_auth_headers(), timeout=5)
+    r.raise_for_status()
+    return r.json()
 
 
 def create_stock(payload: dict) -> dict:
-    response = requests.post(f"{API_BASE_URL}/stocks", json=payload, headers=_auth_headers(), timeout=5)
-    response.raise_for_status()
-    return response.json()
+    r = requests.post(f"{API_BASE_URL}/stocks", json=payload, headers=_auth_headers(), timeout=5)
+    r.raise_for_status()
+    return r.json()
 
 
 def update_stock(stock_id: int, payload: dict) -> dict:
-    response = requests.put(f"{API_BASE_URL}/stocks/{stock_id}", json=payload, headers=_auth_headers(), timeout=5)
-    response.raise_for_status()
-    return response.json()
+    r = requests.put(f"{API_BASE_URL}/stocks/{stock_id}", json=payload, headers=_auth_headers(), timeout=5)
+    r.raise_for_status()
+    return r.json()
 
 
 def delete_stock(stock_id: int) -> None:
-    response = requests.delete(f"{API_BASE_URL}/stocks/{stock_id}", headers=_auth_headers(), timeout=5)
-    response.raise_for_status()
+    r = requests.delete(f"{API_BASE_URL}/stocks/{stock_id}", headers=_auth_headers(), timeout=5)
+    r.raise_for_status()
 
 
 def lookup_company_info(symbol: str) -> dict:
-    response = requests.get(
+    r = requests.get(
         f"{API_BASE_URL}/stocks/lookup/{symbol.strip().upper()}",
         headers=_auth_headers(),
         timeout=10,
     )
-    response.raise_for_status()
-    return response.json()
+    r.raise_for_status()
+    return r.json()
 
 
 def api_login(email: str, password: str) -> dict:
-    response = requests.post(
+    r = requests.post(
         f"{API_BASE_URL}/auth/login",
         data={"username": email, "password": password},
         timeout=10,
     )
-    response.raise_for_status()
-    return response.json()
+    r.raise_for_status()
+    return r.json()
 
 
 def api_register(email: str, password: str) -> dict:
-    response = requests.post(
+    r = requests.post(
         f"{API_BASE_URL}/auth/register",
         json={"email": email, "password": password},
         timeout=10,
     )
-    response.raise_for_status()
-    return response.json()
+    r.raise_for_status()
+    return r.json()
+
+
+def fetch_market_profile(symbol: str) -> dict:
+    r = requests.get(f"{API_BASE_URL}/market/profile/{symbol}", headers=_auth_headers(), timeout=10)
+    r.raise_for_status()
+    return r.json()
+
+
+def fetch_market_quote(symbol: str) -> dict:
+    r = requests.get(f"{API_BASE_URL}/market/quote/{symbol}", headers=_auth_headers(), timeout=10)
+    r.raise_for_status()
+    return r.json()
+
+
+def fetch_market_history(symbol: str) -> dict:
+    r = requests.get(f"{API_BASE_URL}/market/history/{symbol}", headers=_auth_headers(), timeout=10)
+    r.raise_for_status()
+    return r.json()
+
+
+def fetch_market_news(symbol: str) -> dict:
+    r = requests.get(f"{API_BASE_URL}/market/news/{symbol}", headers=_auth_headers(), timeout=10)
+    r.raise_for_status()
+    return r.json()
 
 
 def show_request_error(message: str, error: requests.RequestException) -> None:
@@ -79,13 +103,16 @@ def show_request_error(message: str, error: requests.RequestException) -> None:
 
 st.set_page_config(page_title="AlphaWatch", page_icon="📈", layout="wide")
 
-
 # ── session state defaults ────────────────────────────────────────────────────
 
-if "token" not in st.session_state:
-    st.session_state["token"] = None
-if "user_email" not in st.session_state:
-    st.session_state["user_email"] = None
+for key, default in [
+    ("token", None),
+    ("user_email", None),
+    ("selected_stock_id", None),
+    ("detail_stock_id", None),
+]:
+    if key not in st.session_state:
+        st.session_state[key] = default
 
 
 # ── auth wall ─────────────────────────────────────────────────────────────────
@@ -126,10 +153,126 @@ def show_auth_page() -> None:
                 show_request_error("Registration failed.", err)
 
 
+# ── stock details page ────────────────────────────────────────────────────────
+
+def show_stock_details(stock: dict) -> None:
+    sym = stock["symbol"]
+
+    if st.button("← Back to Watchlist"):
+        st.session_state["detail_stock_id"] = None
+        st.rerun()
+
+    st.title(f"📊 {sym} — {stock['company_name']}")
+    st.caption(f"Sector: {stock['sector']}")
+    st.divider()
+
+    # ── personal data (always available, no API key needed) ───────────────────
+    st.subheader("📝 My Notes")
+    p1, p2, p3, p4 = st.columns(4)
+    p1.metric("Target Price", f"${stock['target_price']:.2f}")
+    p2.metric("Personal Score", f"{stock['personal_score']}/10")
+    p3.metric("Favorite", "⭐ Yes" if stock["is_favorite"] else "No")
+    p4.metric("Sector", stock["sector"])
+    st.info(f"**Thesis:** {stock['thesis']}")
+    st.divider()
+
+    # ── live market data (requires ALPHAVANTAGE_API_KEY) ─────────────────────
+    st.subheader("📡 Live Market Data")
+    st.caption("Powered by Alpha Vantage · Free tier: 25 requests/day")
+
+    col_quote, col_profile = st.columns([1, 2])
+
+    with col_quote:
+        st.markdown("**Current Quote**")
+        try:
+            quote = fetch_market_quote(sym)
+            st.metric(
+                label="Price",
+                value=f"${quote['price']:.2f}",
+                delta=f"{quote['change']:+.2f} ({quote['change_percent']:+.2f}%)",
+            )
+            if quote.get("previous_close"):
+                st.caption(f"Previous close: ${quote['previous_close']:.2f}")
+        except requests.HTTPError as err:
+            if err.response is not None and err.response.status_code == 503:
+                st.warning("⚠️ ALPHAVANTAGE_API_KEY not set.")
+            else:
+                show_request_error("Could not load quote.", err)
+        except requests.RequestException as err:
+            show_request_error("Could not load quote.", err)
+
+    with col_profile:
+        st.markdown("**Company Profile**")
+        try:
+            profile = fetch_market_profile(sym)
+            if profile.get("market_cap"):
+                cap = profile["market_cap"]
+                cap_str = f"${cap / 1e12:.2f}T" if cap >= 1e12 else f"${cap / 1e9:.1f}B"
+                st.caption(f"Market Cap: {cap_str} · Industry: {profile.get('industry', '—')}")
+            desc = profile.get("description", "")
+            if desc:
+                st.write(desc[:400] + ("…" if len(desc) > 400 else ""))
+        except requests.HTTPError as err:
+            if err.response is not None and err.response.status_code == 503:
+                st.warning("⚠️ ALPHAVANTAGE_API_KEY not set.")
+            else:
+                show_request_error("Could not load profile.", err)
+        except requests.RequestException as err:
+            show_request_error("Could not load profile.", err)
+
+    st.divider()
+
+    # Price chart
+    st.subheader("📈 Price History (Last 30 Trading Days)")
+    try:
+        import pandas as pd  # noqa: PLC0415
+
+        history = fetch_market_history(sym)
+        series = history.get("series", [])
+        if series:
+            df = pd.DataFrame(series).set_index("date")
+            df.index = pd.to_datetime(df.index)
+            st.line_chart(df["close"], use_container_width=True)
+        else:
+            st.info("No history data available.")
+    except requests.HTTPError as err:
+        if err.response is not None and err.response.status_code == 503:
+            st.warning("⚠️ ALPHAVANTAGE_API_KEY not set — configure it to see price history.")
+        else:
+            show_request_error("Could not load price history.", err)
+    except requests.RequestException as err:
+        show_request_error("Could not load price history.", err)
+    except ImportError:
+        st.info("Install pandas to enable charts.")
+
+    st.divider()
+
+    # News
+    st.subheader("📰 Latest News")
+    try:
+        news = fetch_market_news(sym)
+        items = news.get("items", [])
+        if not items:
+            st.info("No recent news found for this symbol.")
+        for item in items:
+            with st.container():
+                st.markdown(f"**[{item['title']}]({item['url']})**")
+                st.caption(f"{item['source']} · {item['published_at']}")
+                if item.get("summary"):
+                    st.write(item["summary"][:200] + ("…" if len(item["summary"]) > 200 else ""))
+                st.divider()
+    except requests.HTTPError as err:
+        if err.response is not None and err.response.status_code == 503:
+            st.warning("⚠️ ALPHAVANTAGE_API_KEY not set — configure it to see news.")
+        else:
+            show_request_error("Could not load news.", err)
+    except requests.RequestException as err:
+        show_request_error("Could not load news.", err)
+
+
 # ── main app ──────────────────────────────────────────────────────────────────
 
 def show_main_app() -> None:
-    # ── sidebar ───────────────────────────────────────────────────────────────
     with st.sidebar:
         st.title("📈 AlphaWatch")
         st.caption(f"Logged in as **{st.session_state['user_email']}**")
@@ -145,14 +288,24 @@ def show_main_app() -> None:
         if st.button("Logout", use_container_width=True):
             st.session_state["token"] = None
             st.session_state["user_email"] = None
+            st.session_state["detail_stock_id"] = None
+            st.session_state["selected_stock_id"] = None
             st.rerun()
 
-    # ── fetch data ────────────────────────────────────────────────────────────
     try:
         stocks = list_stocks()
     except requests.RequestException as err:
         show_request_error("Could not load watchlist.", err)
         return
+
+    # ── stock details page ────────────────────────────────────────────────────
+    detail_id = st.session_state.get("detail_stock_id")
+    if detail_id:
+        stock = next((s for s in stocks if s["id"] == detail_id), None)
+        if stock:
+            show_stock_details(stock)
+            return
+        st.session_state["detail_stock_id"] = None
 
     # ── watchlist page ────────────────────────────────────────────────────────
     if page == "Watchlist":
@@ -183,12 +336,17 @@ def show_main_app() -> None:
                 col_c.metric("Score", f"{stock['personal_score']}/10")
                 st.caption(f"**Thesis:** {stock['thesis']}")
 
-                btn_col1, btn_col2 = st.columns(2)
-                with btn_col1:
+                btn1, btn2, btn3 = st.columns(3)
+                with btn1:
+                    if st.button("🔍 Details", key=f"detail_{stock['id']}", use_container_width=True):
+                        st.session_state["detail_stock_id"] = stock["id"]
+                        st.session_state["selected_stock_id"] = None
+                        st.rerun()
+                with btn2:
                     if st.button("✏️ Edit", key=f"edit_{stock['id']}", use_container_width=True):
                         st.session_state["selected_stock_id"] = stock["id"]
                         st.rerun()
-                with btn_col2:
+                with btn3:
                     if st.button("🗑️ Delete", key=f"del_{stock['id']}", use_container_width=True):
                         try:
                             delete_stock(stock["id"])
@@ -198,7 +356,7 @@ def show_main_app() -> None:
                         except requests.RequestException as err:
                             show_request_error("Could not delete stock.", err)
 
-        # Charts — pandas imported lazily so a missing install gives a clear message, not a startup crash
+        # Portfolio charts
         st.divider()
         st.subheader("Portfolio Overview")
         try:
@@ -222,9 +380,9 @@ def show_main_app() -> None:
                 )
                 st.bar_chart(sector_counts)
         except ImportError:
-            st.info("Install pandas (`pip install pandas`) to enable portfolio charts.")
+            st.info("Install pandas to enable portfolio charts.")
 
-        # Edit panel — shown below charts when a stock is selected
+        # Edit panel
         if selected_id:
             stock = next((s for s in stocks if s["id"] == selected_id), None)
             if stock:
