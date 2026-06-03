@@ -1,4 +1,4 @@
-from typing import Annotated, Optional
+from typing import Annotated, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, StringConstraints
 
@@ -68,6 +68,10 @@ class Token(BaseModel):
 
 
 # ── Market schemas ────────────────────────────────────────────────────────────
+# source_mode tells the caller whether data came from a live API or mock fallback.
+
+SourceMode = Literal["live", "mock"]
+
 
 class MarketProfileRead(BaseModel):
     symbol: str
@@ -76,6 +80,7 @@ class MarketProfileRead(BaseModel):
     industry: str
     description: str
     market_cap: Optional[int] = None
+    source_mode: SourceMode = "live"
 
 
 class MarketQuoteRead(BaseModel):
@@ -84,6 +89,7 @@ class MarketQuoteRead(BaseModel):
     change: float
     change_percent: float
     previous_close: Optional[float] = None
+    source_mode: SourceMode = "live"
 
 
 class HistoryPoint(BaseModel):
@@ -94,6 +100,7 @@ class HistoryPoint(BaseModel):
 class MarketHistoryRead(BaseModel):
     symbol: str
     series: list[HistoryPoint]
+    source_mode: SourceMode = "live"
 
 
 class NewsItem(BaseModel):
@@ -107,3 +114,4 @@ class NewsItem(BaseModel):
 class MarketNewsRead(BaseModel):
     symbol: str
     items: list[NewsItem]
+    source_mode: SourceMode = "live"

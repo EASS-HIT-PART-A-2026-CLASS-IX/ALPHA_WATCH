@@ -166,7 +166,7 @@ def show_stock_details(stock: dict) -> None:
     st.caption(f"Sector: {stock['sector']}")
     st.divider()
 
-    # ── personal data (always available, no API key needed) ───────────────────
+    # ── personal notes (always available, no API needed) ─────────────────────
     st.subheader("📝 My Notes")
     p1, p2, p3, p4 = st.columns(4)
     p1.metric("Target Price", f"${stock['target_price']:.2f}")
@@ -176,16 +176,21 @@ def show_stock_details(stock: dict) -> None:
     st.info(f"**Thesis:** {stock['thesis']}")
     st.divider()
 
-    # ── live market data (requires ALPHAVANTAGE_API_KEY) ─────────────────────
-    st.subheader("📡 Live Market Data")
-    st.caption("Powered by Alpha Vantage · Free tier: 25 requests/day")
+    # ── market data (always renders — live or mock) ───────────────────────────
+    st.subheader("📡 Market Data")
 
+    # Track whether any section used mock data
+    any_mock = False
+
+    # Quote + Profile side by side
     col_quote, col_profile = st.columns([1, 2])
 
     with col_quote:
         st.markdown("**Current Quote**")
         try:
             quote = fetch_market_quote(sym)
+            if quote.get("source_mode") == "mock":
+                any_mock = True
             st.metric(
                 label="Price",
                 value=f"${quote['price']:.2f}",
@@ -193,11 +198,6 @@ def show_stock_details(stock: dict) -> None:
             )
             if quote.get("previous_close"):
                 st.caption(f"Previous close: ${quote['previous_close']:.2f}")
-        except requests.HTTPError as err:
-            if err.response is not None and err.response.status_code == 503:
-                st.warning("⚠️ ALPHAVANTAGE_API_KEY not set.")
-            else:
-                show_request_error("Could not load quote.", err)
         except requests.RequestException as err:
             show_request_error("Could not load quote.", err)
 
@@ -205,6 +205,8 @@ def show_stock_details(stock: dict) -> None:
         st.markdown("**Company Profile**")
         try:
             profile = fetch_market_profile(sym)
+            if profile.get("source_mode") == "mock":
+                any_mock = True
             if profile.get("market_cap"):
                 cap = profile["market_cap"]
                 cap_str = f"${cap / 1e12:.2f}T" if cap >= 1e12 else f"${cap / 1e9:.1f}B"
@@ -212,13 +214,16 @@ def show_stock_details(stock: dict) -> None:
             desc = profile.get("description", "")
             if desc:
                 st.write(desc[:400] + ("…" if len(desc) > 400 else ""))
-        except requests.HTTPError as err:
-            if err.response is not None and err.response.status_code == 503:
-                st.warning("⚠️ ALPHAVANTAGE_API_KEY not set.")
-            else:
-                show_request_error("Could not load profile.", err)
         except requests.RequestException as err:
             show_request_error("Could not load profile.", err)
+
+    # Mock data banner — shown once, below both columns
+    if any_mock:
+        st.info(
+            "ℹ️ Showing demo market data. "
+            "Set `ALPHAVANTAGE_API_KEY` to see live prices.",
+            icon="🔵",
+        )
 
     st.divider()
 
@@ -228,6 +233,8 @@ def show_stock_details(stock: dict) -> None:
         import pandas as pd  # noqa: PLC0415
 
         history = fetch_market_history(sym)
+        if history.get("source_mode") == "mock":
+            st.caption("📋 Demo chart — set API key for real price history")
         series = history.get("series", [])
         if series:
             df = pd.DataFrame(series).set_index("date")
@@ -235,11 +242,6 @@ def show_stock_details(stock: dict) -> None:
             st.line_chart(df["close"], use_container_width=True)
         else:
             st.info("No history data available.")
-    except requests.HTTPError as err:
-        if err.response is not None and err.response.status_code == 503:
-            st.warning("⚠️ ALPHAVANTAGE_API_KEY not set — configure it to see price history.")
-        else:
-            show_request_error("Could not load price history.", err)
     except requests.RequestException as err:
         show_request_error("Could not load price history.", err)
     except ImportError:
@@ -251,6 +253,8 @@ def show_stock_details(stock: dict) -> None:
     st.subheader("📰 Latest News")
     try:
         news = fetch_market_news(sym)
+        if news.get("source_mode") == "mock":
+            st.caption("📋 Demo headlines — set API key for real news")
         items = news.get("items", [])
         if not items:
             st.info("No recent news found for this symbol.")
@@ -261,11 +265,6 @@ def show_stock_details(stock: dict) -> None:
                 if item.get("summary"):
                     st.write(item["summary"][:200] + ("…" if len(item["summary"]) > 200 else ""))
                 st.divider()
-    except requests.HTTPError as err:
-        if err.response is not None and err.response.status_code == 503:
-            st.warning("⚠️ ALPHAVANTAGE_API_KEY not set — configure it to see news.")
-        else:
-            show_request_error("Could not load news.", err)
     except requests.RequestException as err:
         show_request_error("Could not load news.", err)
 
@@ -298,7 +297,7 @@ def show_main_app() -> None:
         show_request_error("Could not load watchlist.", err)
         return
 
-    # ── stock details page ────────────────────────────────────────────────────
+    # ── stock details ─────────────────────────────────────────────────────────
     detail_id = st.session_state.get("detail_stock_id")
     if detail_id:
         stock = next((s for s in stocks if s["id"] == detail_id), None)

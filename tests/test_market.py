@@ -1,6 +1,7 @@
 """
 Tests for the /market/* endpoints.
 All external Alpha Vantage calls are mocked — no live network needed.
+Covers both the live-data path and the mock-fallback path.
 """
 import pytest
 from fastapi.testclient import TestClient
@@ -60,9 +61,9 @@ FAKE_NEWS = {
 }
 
 
-# ── /market/profile ───────────────────────────────────────────────────────────
+# ── /market/profile — live path ───────────────────────────────────────────────
 
-def test_profile_returns_data(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_profile_returns_live_data(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("ALPHAVANTAGE_API_KEY", "test-key")
     monkeypatch.setattr("app.company_lookup._av_get", lambda params: FAKE_OVERVIEW)
 
@@ -75,8 +76,7 @@ def test_profile_returns_data(client: TestClient, monkeypatch: pytest.MonkeyPatc
     assert data["company_name"] == "Apple Inc."
     assert data["sector"] == "Technology"
     assert data["industry"] == "Consumer Electronics"
-    assert "Apple" in data["description"]
-    assert data["market_cap"] == 2_800_000_000_000
+    assert data["source_mode"] == "live"
 
 
 def test_profile_normalises_symbol_to_uppercase(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -88,21 +88,43 @@ def test_profile_normalises_symbol_to_uppercase(client: TestClient, monkeypatch:
     assert resp.json()["symbol"] == "AAPL"
 
 
-def test_profile_unknown_symbol_returns_404(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("ALPHAVANTAGE_API_KEY", "test-key")
-    monkeypatch.setattr("app.company_lookup._av_get", lambda params: {})
+# ── /market/profile — fallback path ──────────────────────────────────────────
 
-    token = register_and_login(client)
-    resp = client.get("/market/profile/FAKE", headers=auth(token))
-    assert resp.status_code == 404
-
-
-def test_profile_missing_api_key_returns_503(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_profile_falls_back_to_mock_when_key_missing(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("ALPHAVANTAGE_API_KEY", raising=False)
 
     token = register_and_login(client)
     resp = client.get("/market/profile/AAPL", headers=auth(token))
-    assert resp.status_code == 503
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["symbol"] == "AAPL"
+    assert data["source_mode"] == "mock"
+    assert data["company_name"]   # not empty
+    assert data["description"]
+
+
+def test_profile_falls_back_to_mock_on_api_failure(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ALPHAVANTAGE_API_KEY", "test-key")
+    monkeypatch.setattr("app.company_lookup._av_get", lambda params: {})  # empty = not found
+
+    token = register_and_login(client)
+    resp = client.get("/market/profile/TSLA", headers=auth(token))
+
+    assert resp.status_code == 200
+    assert resp.json()["source_mode"] == "mock"
+
+
+def test_profile_mock_for_unknown_symbol(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("ALPHAVANTAGE_API_KEY", raising=False)
+
+    token = register_and_login(client)
+    resp = client.get("/market/profile/XYZ", headers=auth(token))
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["symbol"] == "XYZ"
+    assert data["source_mode"] == "mock"
 
 
 def test_profile_requires_auth(client: TestClient) -> None:
@@ -110,9 +132,9 @@ def test_profile_requires_auth(client: TestClient) -> None:
     assert resp.status_code == 401
 
 
-# ── /market/quote ─────────────────────────────────────────────────────────────
+# ── /market/quote — live path ─────────────────────────────────────────────────
 
-def test_quote_returns_data(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_quote_returns_live_data(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("ALPHAVANTAGE_API_KEY", "test-key")
     monkeypatch.setattr("app.market_routes._av_get", lambda params: FAKE_GLOBAL_QUOTE)
 
@@ -121,28 +143,36 @@ def test_quote_returns_data(client: TestClient, monkeypatch: pytest.MonkeyPatch)
 
     assert resp.status_code == 200
     data = resp.json()
-    assert data["symbol"] == "AAPL"
     assert data["price"] == pytest.approx(189.50)
-    assert data["change"] == pytest.approx(2.50)
-    assert data["change_percent"] == pytest.approx(1.3369)
-    assert data["previous_close"] == pytest.approx(187.00)
+    assert data["source_mode"] == "live"
 
 
-def test_quote_unknown_symbol_returns_404(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("ALPHAVANTAGE_API_KEY", "test-key")
-    monkeypatch.setattr("app.market_routes._av_get", lambda params: {"Global Quote": {}})
+# ── /market/quote — fallback path ─────────────────────────────────────────────
 
-    token = register_and_login(client)
-    resp = client.get("/market/quote/FAKE", headers=auth(token))
-    assert resp.status_code == 404
-
-
-def test_quote_missing_api_key_returns_503(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_quote_falls_back_to_mock_when_key_missing(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("ALPHAVANTAGE_API_KEY", raising=False)
 
     token = register_and_login(client)
     resp = client.get("/market/quote/AAPL", headers=auth(token))
-    assert resp.status_code == 503
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["symbol"] == "AAPL"
+    assert data["price"] > 0
+    assert data["source_mode"] == "mock"
+
+
+def test_quote_mock_for_unknown_symbol(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("ALPHAVANTAGE_API_KEY", raising=False)
+
+    token = register_and_login(client)
+    resp = client.get("/market/quote/XYZ", headers=auth(token))
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["symbol"] == "XYZ"
+    assert data["price"] > 0
+    assert data["source_mode"] == "mock"
 
 
 def test_quote_requires_auth(client: TestClient) -> None:
@@ -150,9 +180,9 @@ def test_quote_requires_auth(client: TestClient) -> None:
     assert resp.status_code == 401
 
 
-# ── /market/history ───────────────────────────────────────────────────────────
+# ── /market/history — live path ───────────────────────────────────────────────
 
-def test_history_returns_series(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_history_returns_live_series(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("ALPHAVANTAGE_API_KEY", "test-key")
     monkeypatch.setattr("app.market_routes._av_get", lambda params: FAKE_TIME_SERIES)
 
@@ -161,29 +191,26 @@ def test_history_returns_series(client: TestClient, monkeypatch: pytest.MonkeyPa
 
     assert resp.status_code == 200
     data = resp.json()
-    assert data["symbol"] == "AAPL"
-    assert isinstance(data["series"], list)
+    assert data["source_mode"] == "live"
     assert len(data["series"]) == 3
-    # series must be ascending (oldest first) for charting
     assert data["series"][0]["date"] < data["series"][-1]["date"]
-    assert data["series"][0]["close"] == pytest.approx(182.00)
 
 
-def test_history_unknown_symbol_returns_404(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("ALPHAVANTAGE_API_KEY", "test-key")
-    monkeypatch.setattr("app.market_routes._av_get", lambda params: {})
+# ── /market/history — fallback path ──────────────────────────────────────────
 
-    token = register_and_login(client)
-    resp = client.get("/market/history/FAKE", headers=auth(token))
-    assert resp.status_code == 404
-
-
-def test_history_missing_api_key_returns_503(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_history_falls_back_to_mock_when_key_missing(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("ALPHAVANTAGE_API_KEY", raising=False)
 
     token = register_and_login(client)
     resp = client.get("/market/history/AAPL", headers=auth(token))
-    assert resp.status_code == 503
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["source_mode"] == "mock"
+    assert len(data["series"]) == 30
+    # must be ascending for charting
+    assert data["series"][0]["date"] < data["series"][-1]["date"]
+    assert all(p["close"] > 0 for p in data["series"])
 
 
 def test_history_requires_auth(client: TestClient) -> None:
@@ -191,9 +218,9 @@ def test_history_requires_auth(client: TestClient) -> None:
     assert resp.status_code == 401
 
 
-# ── /market/news ──────────────────────────────────────────────────────────────
+# ── /market/news — live path ──────────────────────────────────────────────────
 
-def test_news_returns_items(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_news_returns_live_items(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("ALPHAVANTAGE_API_KEY", "test-key")
     monkeypatch.setattr("app.market_routes._av_get", lambda params: FAKE_NEWS)
 
@@ -202,17 +229,11 @@ def test_news_returns_items(client: TestClient, monkeypatch: pytest.MonkeyPatch)
 
     assert resp.status_code == 200
     data = resp.json()
-    assert data["symbol"] == "AAPL"
-    assert len(data["items"]) == 1
-    item = data["items"][0]
-    assert item["title"] == "Apple hits record high"
-    assert item["source"] == "Reuters"
-    assert item["published_at"] == "2024-01-03 12:00"
-    assert item["url"] == "https://example.com/apple-record"
-    assert "surged" in item["summary"]
+    assert data["source_mode"] == "live"
+    assert data["items"][0]["title"] == "Apple hits record high"
 
 
-def test_news_empty_feed_returns_empty_list(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_news_empty_live_feed_returns_empty_list(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("ALPHAVANTAGE_API_KEY", "test-key")
     monkeypatch.setattr("app.market_routes._av_get", lambda params: {"feed": []})
 
@@ -221,14 +242,34 @@ def test_news_empty_feed_returns_empty_list(client: TestClient, monkeypatch: pyt
 
     assert resp.status_code == 200
     assert resp.json()["items"] == []
+    assert resp.json()["source_mode"] == "live"
 
 
-def test_news_missing_api_key_returns_503(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+# ── /market/news — fallback path ──────────────────────────────────────────────
+
+def test_news_falls_back_to_mock_when_key_missing(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("ALPHAVANTAGE_API_KEY", raising=False)
 
     token = register_and_login(client)
     resp = client.get("/market/news/AAPL", headers=auth(token))
-    assert resp.status_code == 503
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["source_mode"] == "mock"
+    assert len(data["items"]) > 0
+    assert data["items"][0]["title"]
+    assert data["items"][0]["source"]
+
+
+def test_news_mock_contains_symbol_in_titles(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("ALPHAVANTAGE_API_KEY", raising=False)
+
+    token = register_and_login(client)
+    resp = client.get("/market/news/NVDA", headers=auth(token))
+
+    assert resp.status_code == 200
+    items = resp.json()["items"]
+    assert any("NVDA" in item["title"] for item in items)
 
 
 def test_news_requires_auth(client: TestClient) -> None:

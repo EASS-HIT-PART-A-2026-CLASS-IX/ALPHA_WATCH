@@ -1,4 +1,15 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+"""
+market_routes.py
+
+Each endpoint tries to fetch real data from Alpha Vantage.
+If the API key is missing OR the external request fails for any reason,
+it falls back to built-in mock data instead of returning an error.
+The response always includes source_mode: "live" | "mock" so the UI
+can optionally show a banner when demo data is being used.
+"""
+import logging
+
+from fastapi import APIRouter, Depends
 
 from app.auth import get_current_user
 from app.company_lookup import (
@@ -9,6 +20,7 @@ from app.company_lookup import (
     _get_api_key,
     fetch_company_overview,
 )
+from app.mock_data import mock_history, mock_news, mock_profile, mock_quote
 from app.models import User
 from app.schemas import (
     HistoryPoint,
@@ -19,21 +31,13 @@ from app.schemas import (
     NewsItem,
 )
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/market", tags=["market"])
 
 
-def _symbol(raw: str) -> str:
+def _sym(raw: str) -> str:
     return raw.strip().upper()
-
-
-def _handle_lookup_error(error: Exception) -> None:
-    """Convert company_lookup exceptions into HTTP responses."""
-    if isinstance(error, CompanyLookupConfigError):
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(error))
-    if isinstance(error, CompanyLookupNotFoundError):
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(error))
-    if isinstance(error, CompanyLookupServiceError):
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(error))
 
 
 # ── Profile ───────────────────────────────────────────────────────────────────
@@ -43,13 +47,14 @@ def get_market_profile(
     symbol: str,
     _user: User = Depends(get_current_user),
 ) -> MarketProfileRead:
-    """Return a rich company profile from Alpha Vantage OVERVIEW."""
+    """Company profile — falls back to mock when API key is absent or call fails."""
+    sym = _sym(symbol)
     try:
-        data = fetch_company_overview(_symbol(symbol))
-    except Exception as exc:
-        _handle_lookup_error(exc)
-        raise
-    return MarketProfileRead(**data)
+        data = fetch_company_overview(sym)
+        return MarketProfileRead(**data, source_mode="live")
+    except (CompanyLookupConfigError, CompanyLookupNotFoundError, CompanyLookupServiceError) as exc:
+        logger.info("Profile fallback for %s: %s", sym, exc)
+        return MarketProfileRead(**mock_profile(sym))
 
 
 # ── Quote ─────────────────────────────────────────────────────────────────────
@@ -59,38 +64,34 @@ def get_quote(
     symbol: str,
     _user: User = Depends(get_current_user),
 ) -> MarketQuoteRead:
-    """Return the latest price quote from Alpha Vantage GLOBAL_QUOTE."""
-    sym = _symbol(symbol)
+    """Live quote — falls back to mock when API key is absent or call fails."""
+    sym = _sym(symbol)
     try:
         api_key = _get_api_key()
         data = _av_get({"function": "GLOBAL_QUOTE", "symbol": sym, "apikey": api_key})
-    except CompanyLookupConfigError as exc:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
-    except CompanyLookupServiceError as exc:
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+        quote = data.get("Global Quote", {})
+        price_raw = quote.get("05. price")
+        if not price_raw:
+            raise CompanyLookupNotFoundError(f"No quote for '{sym}'")
 
-    quote = data.get("Global Quote", {})
-    price_raw = quote.get("05. price")
-    if not price_raw:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"No quote data found for symbol '{sym}'",
+        def _f(key: str) -> float:
+            raw = quote.get(key, "0").replace("%", "").strip()
+            try:
+                return float(raw)
+            except ValueError:
+                return 0.0
+
+        return MarketQuoteRead(
+            symbol=sym,
+            price=_f("05. price"),
+            change=_f("09. change"),
+            change_percent=_f("10. change percent"),
+            previous_close=_f("08. previous close") or None,
+            source_mode="live",
         )
-
-    def _f(key: str) -> float:
-        raw = quote.get(key, "0").replace("%", "").strip()
-        try:
-            return float(raw)
-        except ValueError:
-            return 0.0
-
-    return MarketQuoteRead(
-        symbol=sym,
-        price=_f("05. price"),
-        change=_f("09. change"),
-        change_percent=_f("10. change percent"),
-        previous_close=_f("08. previous close") or None,
-    )
+    except (CompanyLookupConfigError, CompanyLookupNotFoundError, CompanyLookupServiceError) as exc:
+        logger.info("Quote fallback for %s: %s", sym, exc)
+        return MarketQuoteRead(**mock_quote(sym))
 
 
 # ── History ───────────────────────────────────────────────────────────────────
@@ -100,8 +101,8 @@ def get_history(
     symbol: str,
     _user: User = Depends(get_current_user),
 ) -> MarketHistoryRead:
-    """Return the last 30 trading days of daily close prices."""
-    sym = _symbol(symbol)
+    """30-day price history — falls back to mock when API key is absent or call fails."""
+    sym = _sym(symbol)
     try:
         api_key = _get_api_key()
         data = _av_get({
@@ -110,25 +111,21 @@ def get_history(
             "outputsize": "compact",
             "apikey": api_key,
         })
-    except CompanyLookupConfigError as exc:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
-    except CompanyLookupServiceError as exc:
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+        time_series = data.get("Time Series (Daily)")
+        if not time_series:
+            raise CompanyLookupNotFoundError(f"No history for '{sym}'")
 
-    time_series = data.get("Time Series (Daily)")
-    if not time_series:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"No history data found for symbol '{sym}'",
-        )
-
-    # Sort descending, take last 30 days, return ascending for charting
-    sorted_dates = sorted(time_series.keys(), reverse=True)[:30]
-    series = [
-        HistoryPoint(date=date, close=float(time_series[date]["4. close"]))
-        for date in reversed(sorted_dates)
-    ]
-    return MarketHistoryRead(symbol=sym, series=series)
+        sorted_dates = sorted(time_series.keys(), reverse=True)[:30]
+        series = [
+            HistoryPoint(date=d, close=float(time_series[d]["4. close"]))
+            for d in reversed(sorted_dates)
+        ]
+        return MarketHistoryRead(symbol=sym, series=series, source_mode="live")
+    except (CompanyLookupConfigError, CompanyLookupNotFoundError, CompanyLookupServiceError) as exc:
+        logger.info("History fallback for %s: %s", sym, exc)
+        raw = mock_history(sym)
+        series = [HistoryPoint(**p) for p in raw["series"]]
+        return MarketHistoryRead(symbol=sym, series=series, source_mode="mock")
 
 
 # ── News ──────────────────────────────────────────────────────────────────────
@@ -138,8 +135,8 @@ def get_news(
     symbol: str,
     _user: User = Depends(get_current_user),
 ) -> MarketNewsRead:
-    """Return up to 10 recent news items from Alpha Vantage NEWS_SENTIMENT."""
-    sym = _symbol(symbol)
+    """Recent news — falls back to mock when API key is absent or call fails."""
+    sym = _sym(symbol)
     try:
         api_key = _get_api_key()
         data = _av_get({
@@ -148,26 +145,25 @@ def get_news(
             "limit": 10,
             "apikey": api_key,
         })
-    except CompanyLookupConfigError as exc:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
-    except CompanyLookupServiceError as exc:
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
-
-    feed = data.get("feed", [])
-    items = []
-    for article in feed[:10]:
-        raw_dt = article.get("time_published", "")
-        published_at = (
-            f"{raw_dt[:4]}-{raw_dt[4:6]}-{raw_dt[6:8]} {raw_dt[9:11]}:{raw_dt[11:13]}"
-            if len(raw_dt) >= 13
-            else raw_dt
-        )
-        items.append(NewsItem(
-            title=article.get("title", ""),
-            source=article.get("source", ""),
-            published_at=published_at,
-            url=article.get("url", ""),
-            summary=article.get("summary") or None,
-        ))
-
-    return MarketNewsRead(symbol=sym, items=items)
+        feed = data.get("feed", [])
+        items = []
+        for article in feed[:10]:
+            raw_dt = article.get("time_published", "")
+            published_at = (
+                f"{raw_dt[:4]}-{raw_dt[4:6]}-{raw_dt[6:8]} {raw_dt[9:11]}:{raw_dt[11:13]}"
+                if len(raw_dt) >= 13
+                else raw_dt
+            )
+            items.append(NewsItem(
+                title=article.get("title", ""),
+                source=article.get("source", ""),
+                published_at=published_at,
+                url=article.get("url", ""),
+                summary=article.get("summary") or None,
+            ))
+        return MarketNewsRead(symbol=sym, items=items, source_mode="live")
+    except (CompanyLookupConfigError, CompanyLookupServiceError) as exc:
+        logger.info("News fallback for %s: %s", sym, exc)
+        raw = mock_news(sym)
+        items = [NewsItem(**i) for i in raw["items"]]
+        return MarketNewsRead(symbol=sym, items=items, source_mode="mock")

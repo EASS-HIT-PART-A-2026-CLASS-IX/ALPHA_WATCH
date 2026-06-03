@@ -17,10 +17,8 @@ A personal stock watchlist application built with FastAPI, SQLite, JWT authentic
 | Admin-only route | ✅ |
 | Full stock CRUD | ✅ |
 | Company auto-fill via Alpha Vantage | ✅ |
-| Real market profile endpoint | ✅ |
-| Real live quote endpoint | ✅ |
-| Real price history endpoint | ✅ |
-| Real news endpoint | ✅ |
+| Real market profile / quote / history / news | ✅ |
+| Built-in mock fallback when no API key | ✅ |
 | Stock Details page in Streamlit | ✅ |
 
 ---
@@ -35,30 +33,16 @@ pip install -e ".[dev]"
 uv pip install -e ".[dev]"
 ```
 
-### 2. Configure API keys
-
-Market data is powered by [Alpha Vantage](https://www.alphavantage.co/support/#api-key) (free tier, no credit card).
-
-```bash
-export ALPHAVANTAGE_API_KEY=your_key_here
-export SECRET_KEY=a-long-random-string-here   # JWT secret — change in production
-```
-
-> Without `ALPHAVANTAGE_API_KEY`, stock CRUD and auth still work fully.
-> Market data endpoints return a clear 503 with an explanatory message.
-
-### 3. Run the FastAPI backend
+### 2. Run the FastAPI backend
 
 ```bash
 uvicorn app.main:app --reload
 ```
 
 - API: `http://127.0.0.1:8000`
-- Interactive docs: `http://127.0.0.1:8000/docs`
+- Docs: `http://127.0.0.1:8000/docs`
 
-The SQLite database (`alphawatch.db`) is created automatically on first run.
-
-### 4. Run the Streamlit frontend
+### 3. Run the Streamlit frontend
 
 ```bash
 streamlit run ui/streamlit_app.py
@@ -68,17 +52,44 @@ Opens at `http://localhost:8501`. Register an account on first visit.
 
 ---
 
+## Live data vs demo data
+
+AlphaWatch works fully out of the box — **no API key required**.
+
+| Mode | When | How to tell |
+|---|---|---|
+| **Live** | `ALPHAVANTAGE_API_KEY` is set and the call succeeds | `source_mode: "live"` in API response |
+| **Demo (mock)** | Key is missing or external call fails | `source_mode: "mock"` in API response; small info banner in the UI |
+
+To enable live market data, get a free key at https://www.alphavantage.co/support/#api-key and run:
+
+```bash
+export ALPHAVANTAGE_API_KEY=your_key_here
+export SECRET_KEY=a-long-random-string-here   # change in production
+uvicorn app.main:app --reload
+```
+
+### What mock data looks like
+
+When no API key is set, the backend returns realistic built-in data:
+
+- **Profile**: full company description, sector, industry, market cap for AAPL, MSFT, NVDA, TSLA, AMZN, META, GOOGL — and generic data for any other symbol
+- **Quote**: a deterministic price based on the symbol (same each day, looks stable)
+- **History**: 30 days of a realistic random-walk price chart seeded by symbol
+- **News**: 5 plausible recent headlines with the symbol in the title
+
+The Stock Details page renders all sections normally and shows a small info banner:
+> ℹ️ Showing demo market data. Set `ALPHAVANTAGE_API_KEY` to see live prices.
+
+---
+
 ## Authentication flow
 
 ```
 POST /auth/register   { "email": "...", "password": "..." }
-  → 201 { "id": 1, "email": "...", "role": "user" }
-
 POST /auth/login      form-data: username=... password=...
-  → 200 { "access_token": "<jwt>", "token_type": "bearer" }
-
 GET  /auth/me         Authorization: Bearer <jwt>
-GET  /auth/admin/users   (admin role required → 403 otherwise)
+GET  /auth/admin/users   (admin role required)
 ```
 
 ---
@@ -98,49 +109,14 @@ GET  /auth/admin/users   (admin role required → 403 otherwise)
 
 ## Market data endpoints
 
-All endpoints require a valid Bearer token and `ALPHAVANTAGE_API_KEY`.
+All endpoints require a Bearer token. They always return data (live or mock).
 
 | Path | Returns |
 |---|---|
-| `GET /market/profile/{symbol}` | symbol, company_name, sector, industry, description, market_cap |
-| `GET /market/quote/{symbol}` | price, change, change_percent, previous_close |
-| `GET /market/history/{symbol}` | 30-day daily close price series (ascending, ready to chart) |
-| `GET /market/news/{symbol}` | up to 10 recent news items (title, source, published_at, url, summary) |
-
-### Error responses
-
-| Situation | HTTP status |
-|---|---|
-| `ALPHAVANTAGE_API_KEY` not set | 503 Service Unavailable |
-| Symbol not found / no data | 404 Not Found |
-| Alpha Vantage request failed | 502 Bad Gateway |
-
----
-
-## Stock Details page
-
-Click **🔍 Details** on any watchlist entry. The page shows:
-
-- Your personal notes: target price, score, thesis, favorite status
-- Live quote with price and daily change/percent
-- Company profile: description, market cap, industry
-- 30-day price chart (line chart, pandas + Streamlit)
-- Latest news feed with clickable headlines
-
----
-
-## Provider limitations (Alpha Vantage free tier)
-
-| Limit | Value |
-|---|---|
-| Requests per day | 25 |
-| Requests per minute | 5 |
-| Quote freshness | ~15–20 min delayed |
-| News | Recent articles only, no full-text |
-
-Opening the Stock Details page makes up to 4 API calls (profile, quote, history, news).
-With a free key and 25 calls/day, opening ~6 stock detail pages will exhaust the daily limit.
-Upgrade to a paid Alpha Vantage key for production use.
+| `GET /market/profile/{symbol}` | symbol, company_name, sector, industry, description, market_cap, **source_mode** |
+| `GET /market/quote/{symbol}` | price, change, change_percent, previous_close, **source_mode** |
+| `GET /market/history/{symbol}` | 30-day daily close series (ascending), **source_mode** |
+| `GET /market/news/{symbol}` | up to 10 news items, **source_mode** |
 
 ---
 
@@ -150,16 +126,15 @@ Upgrade to a paid Alpha Vantage key for production use.
 pytest
 ```
 
-All external API calls are mocked — no API key or network access required.
+No API key or network access needed — all external calls are mocked.
 
 ### What is tested
 
 - Auth: registration, login, protected routes, expired tokens, role checks
-- Stock CRUD: create, read, update, delete, isolation between users
-- Market profile: success, 404 for unknown symbol, 503 for missing key, 401 without token
-- Market quote: success, 404 for unknown symbol, 503 for missing key, 401 without token
-- Market history: success, correct ascending order, 404, 503, 401
-- Market news: success, empty feed, 503, 401
+- Stock CRUD: create, read, update, delete, user isolation
+- Market (live path): correct data returned when API responds
+- Market (fallback path): mock data returned when key missing or API fails
+- Mock data: symbol appears in headlines, prices are positive, series is ascending
 
 ---
 
@@ -168,22 +143,23 @@ All external API calls are mocked — no API key or network access required.
 ```
 ALPHA_WATCH/
 ├── app/
-│   ├── auth.py              # bcrypt hashing, JWT encode/decode, dependency helpers
-│   ├── auth_routes.py       # /auth/register, /auth/login, /auth/me, /auth/admin/users
-│   ├── company_lookup.py    # Alpha Vantage OVERVIEW — used by both /stocks/lookup and /market/profile
-│   ├── database.py          # SQLite engine, get_session, init_db
-│   ├── main.py              # FastAPI app + lifespan startup hook
-│   ├── market_routes.py     # /market/profile, /quote, /history, /news — real integrations
-│   ├── models.py            # SQLModel tables: User, Stock
-│   ├── routes.py            # /stocks CRUD (per-user isolation)
-│   └── schemas.py           # Pydantic v2 schemas: stock, auth, market
+│   ├── auth.py              # bcrypt, JWT, dependency helpers
+│   ├── auth_routes.py       # /auth/* endpoints
+│   ├── company_lookup.py    # Alpha Vantage OVERVIEW wrapper
+│   ├── database.py          # SQLite engine + session
+│   ├── main.py              # FastAPI app + lifespan
+│   ├── market_routes.py     # /market/* — live with mock fallback
+│   ├── mock_data.py         # built-in demo data (no API key needed)
+│   ├── models.py            # SQLModel: User, Stock
+│   ├── routes.py            # /stocks CRUD
+│   └── schemas.py           # Pydantic schemas (stock, auth, market)
 ├── tests/
-│   ├── conftest.py          # in-memory DB fixture + TestClient override
+│   ├── conftest.py
 │   ├── test_auth.py
 │   ├── test_stocks.py
-│   └── test_market.py       # mocked tests for all 4 market endpoints
+│   └── test_market.py       # covers both live and mock fallback paths
 ├── ui/
-│   └── streamlit_app.py     # login/register + watchlist + stock details dashboard
+│   └── streamlit_app.py
 ├── .gitignore
 ├── pyproject.toml
 └── README.md
@@ -195,9 +171,8 @@ ALPHA_WATCH/
 
 Claude (Anthropic) and GitHub Copilot were used during development for:
 
-- Drafting Alpha Vantage response parsing logic for quote, history, and news
-- Structuring Pydantic response schemas for market data
-- Generating mocked pytest fixtures for external API tests
-- Streamlit layout and error handling for the Stock Details page
+- Designing the live/mock fallback pattern and `source_mode` field
+- Generating symbol-aware mock data for common tickers
+- Writing pytest fixtures that cover both the live and fallback code paths
 
 All generated code was reviewed, understood, and adapted before committing.
