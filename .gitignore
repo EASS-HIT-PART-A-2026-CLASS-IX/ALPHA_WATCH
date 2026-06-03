@@ -1,7 +1,14 @@
-.venv/
-.uv-cache/
-.pytest_cache/
 __pycache__/
 *.py[cod]
 *.egg-info/
+.venv/
+venv/
+.uv-cache/
 *.db
+*.sqlite
+.env
+.idea/
+.vscode/
+.DS_Store
+.pytest_cache/
+.coverage
