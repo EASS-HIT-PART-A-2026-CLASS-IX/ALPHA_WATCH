@@ -1,26 +1,38 @@
 # Compose Runbook
 
+This runbook verifies the local EX3 stack: FastAPI API, Redis, worker, SQLite persistence, tests, Schemathesis, and the Streamlit dashboard.
+
 ## What Compose Covers
 
-`docker compose up` starts the EX3 infrastructure services:
+`docker compose up` starts:
 
 - FastAPI API at `http://127.0.0.1:8000`
 - Redis at `localhost:6379`
-- background worker using the same SQLite data volume as the API
+- background worker using the same SQLite volume as the API
 
-The Streamlit dashboard stays local by default:
+Streamlit stays local by default:
 
 ```bash
 uv run streamlit run ui/streamlit_app.py
 ```
 
-## Launch The Stack
+## Fresh Clone Setup
 
-Install dependencies locally:
+Install dependencies:
 
 ```bash
 uv sync --extra dev
 ```
+
+Validate the local source tree:
+
+```bash
+uv run scripts/local_ci.sh
+```
+
+The local CI script runs Python syntax checks, pytest, compose config validation, and Schemathesis when an API is already running. If the API is not running, it skips Schemathesis and prints the exact command to run later.
+
+## Launch The Stack
 
 Start API, Redis, and worker:
 
@@ -48,17 +60,25 @@ docker compose down -v
 
 ## Verify API Health
 
-Open:
+Check OpenAPI:
+
+```bash
+curl -fsS http://127.0.0.1:8000/openapi.json >/dev/null
+```
+
+Check docs in a browser:
 
 ```text
 http://127.0.0.1:8000/docs
 ```
 
-Or run:
+Show response headers:
 
 ```bash
-curl http://127.0.0.1:8000/docs
+curl -i http://127.0.0.1:8000/openapi.json | sed -n '1,20p'
 ```
+
+AlphaWatch does not currently implement request rate limiting, so no `X-RateLimit-*` headers are expected. If rate limiting is added later, this header check is where those headers should be verified.
 
 ## Verify Redis
 
@@ -86,7 +106,17 @@ You should see a cycle summary like:
 refresh cycle complete: symbols=3 refreshed=3 skipped=0 errors=0
 ```
 
-If no stocks exist yet, run `docker compose exec api python scripts/seed.py` or register through the dashboard and add stocks.
+If no stocks exist yet, run:
+
+```bash
+docker compose exec api python scripts/seed.py
+```
+
+You can also run one manual refresh and then watch the worker continue on its interval:
+
+```bash
+uv run python scripts/refresh.py AAPL MSFT --concurrency 2 --retries 2
+```
 
 ## Run The Streamlit Dashboard
 
@@ -102,19 +132,67 @@ Open:
 http://localhost:8501
 ```
 
-Use the demo login if you ran `scripts/seed.py`:
+Use the demo login after seeding:
 
 ```text
 demo@alphawatch.local / password123
 ```
 
-## Run Tests
+## Run Pytest
 
 ```bash
 uv run pytest
 ```
 
-The tests mock Yahoo Finance and fake Redis where needed. They do not require real network calls.
+The tests mock Yahoo Finance and fake Redis where needed. They do not require real market network calls.
+
+## Run Schemathesis
+
+Schemathesis is included in the `dev` dependencies. It checks the live OpenAPI schema against the running API.
+
+Start the compose stack first:
+
+```bash
+docker compose up --build
+```
+
+Then run:
+
+```bash
+uv run scripts/schemathesis.sh
+```
+
+The script runs a small GET-focused Schemathesis smoke test against `http://127.0.0.1:8000/openapi.json` with an intentionally invalid bearer token. This keeps the check local and stable: protected routes should reject the request before Yahoo-backed endpoint logic runs, and Schemathesis verifies that those requests do not produce server errors.
+
+## Local CI Equivalent
+
+For a local CI-style check:
+
+```bash
+uv run scripts/local_ci.sh
+```
+
+Recommended full verification flow:
+
+```bash
+uv sync --extra dev
+docker compose up --build
+docker compose exec api python scripts/seed.py
+uv run scripts/local_ci.sh
+```
+
+In hosted CI, the equivalent steps would be:
+
+```bash
+uv sync --extra dev
+uv run python -m compileall app scripts tests
+uv run pytest
+docker compose config
+docker compose up -d --build
+docker compose exec -T api python scripts/seed.py
+uv run scripts/schemathesis.sh
+docker compose down
+```
 
 ## Run Manual Refresh
 

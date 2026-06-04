@@ -20,6 +20,8 @@ EX3 adds the missing local infrastructure layer without replacing the existing d
 - local demo script
 - EX3 docs and compose runbook
 - weekly markdown stock summary report enhancement
+- Schemathesis/OpenAPI verification helper
+- local CI-equivalent script
 
 ## Service Architecture
 
@@ -227,6 +229,24 @@ Print the local demo walkthrough:
 ```
 
 The script guides a grader through setup, login, adding/viewing stocks, opening details, seeing market data, checking worker logs, and running the report.
+
+## Schemathesis And Local CI
+
+Run the local CI-equivalent checks:
+
+```bash
+uv run scripts/local_ci.sh
+```
+
+With the compose stack or local API running, run Schemathesis against the live OpenAPI schema:
+
+```bash
+uv run scripts/schemathesis.sh
+```
+
+The Schemathesis helper is a local GET smoke test with an intentionally invalid bearer token. It checks that protected OpenAPI routes do not produce server errors without triggering Yahoo Finance calls.
+
+AlphaWatch does not currently expose rate-limit headers because it does not include rate-limit middleware. The compose runbook includes a response-header check and notes where those headers would be verified if rate limiting is added later.
 
 ## Database Setup
 

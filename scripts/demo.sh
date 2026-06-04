@@ -34,8 +34,14 @@ AlphaWatch EX3 local demo
    curl -H "Authorization: Bearer TOKEN_HERE" http://127.0.0.1:8000/reports/weekly
 
 8. Verify health:
+   curl -fsS http://127.0.0.1:8000/openapi.json >/dev/null
    curl http://127.0.0.1:8000/docs
    docker compose exec redis redis-cli ping
+
+9. Run verification:
+   uv run pytest
+   uv run scripts/schemathesis.sh
+   uv run scripts/local_ci.sh
 
 Stop the stack with:
    docker compose down

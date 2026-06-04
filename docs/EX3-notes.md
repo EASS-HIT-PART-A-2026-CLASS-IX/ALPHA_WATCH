@@ -17,6 +17,8 @@ EX3 adds a small infrastructure layer around the existing product:
 - `app.worker` refreshes saved stock data in the background.
 - `scripts/refresh.py` lets a student or grader run the same refresh flow manually.
 - `scripts/seed.py` initializes a fresh local database with a demo account and sample stocks.
+- `scripts/local_ci.sh` gives a local CI-equivalent verification path.
+- `scripts/schemathesis.sh` runs a small OpenAPI contract check against the live API.
 - `/reports/weekly` is the documented EX3 enhancement.
 
 ## Services
@@ -30,6 +32,12 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 
 It initializes SQLite tables on startup and exposes the existing product endpoints plus the weekly report endpoint.
+
+Health is verified through:
+
+```bash
+curl -fsS http://127.0.0.1:8000/openapi.json >/dev/null
+```
 
 ### Redis
 
@@ -68,6 +76,8 @@ AlphaWatch keeps its existing security model:
 - protected routes require `Authorization: Bearer <token>`
 - admin routes require role `admin`
 - stocks remain isolated by `user_id`
+- local secrets are read from environment variables
+- SQLite database files and `.env` files are ignored by git
 
 Local compose uses:
 
@@ -75,7 +85,9 @@ Local compose uses:
 SECRET_KEY=local-compose-secret-change-me
 ```
 
-This is intentionally simple for class/demo use. Do not reuse it outside local development.
+This is intentionally simple for class/demo use. For a real local handoff, set a different value in a local `.env` file or shell environment and keep it out of git.
+
+AlphaWatch does not currently expose rate-limit headers because no rate-limit middleware is installed. The runbook includes a header inspection command so this can be verified explicitly. If rate limiting is added later, expected `X-RateLimit-*` headers should be documented there.
 
 ## JWT Secret Rotation
 
@@ -124,6 +136,8 @@ Refresh behavior:
 - Redis idempotency prevents duplicate work
 - results are stored in SQLite snapshots
 
+The worker is intentionally local and small. It does not use a cloud queue, cron service, or hosted database.
+
 ## Redis Idempotency
 
 Before refreshing a symbol, AlphaWatch attempts:
@@ -154,3 +168,28 @@ GET /reports/weekly
 ```
 
 It combines the authenticated user's saved watchlist with the latest background refresh snapshot and returns markdown suitable for local review or export.
+
+Automated coverage lives in `tests/test_reports.py`.
+
+## Verification
+
+Core automated checks:
+
+```bash
+uv run pytest
+```
+
+Local CI-equivalent check:
+
+```bash
+uv run scripts/local_ci.sh
+```
+
+Schemathesis contract smoke check against a running API:
+
+```bash
+docker compose up --build
+uv run scripts/schemathesis.sh
+```
+
+The Schemathesis helper intentionally uses an invalid bearer token for GET requests. That keeps the check deterministic and local by verifying protected routes reject unauthenticated traffic without reaching Yahoo Finance calls.
