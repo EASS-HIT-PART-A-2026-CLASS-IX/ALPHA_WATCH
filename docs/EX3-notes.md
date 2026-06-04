@@ -12,11 +12,11 @@ AlphaWatch remains the same stock dashboard product:
 
 EX3 adds a small infrastructure layer around the existing product:
 
-- `compose.yaml` starts API, Redis, and a worker.
+- `compose.yaml` starts API, Redis, seed, worker, and Streamlit UI.
 - Redis coordinates refresh idempotency.
 - `app.worker` refreshes saved stock data in the background.
 - `scripts/refresh.py` lets a student or grader run the same refresh flow manually.
-- `scripts/seed.py` initializes a fresh local database with a demo account and sample stocks.
+- `scripts/seed.py` initializes a fresh local database with a demo account and sample stocks, and Compose runs it automatically through the `seed` service.
 - `scripts/local_ci.sh` gives a local CI-equivalent verification path.
 - `scripts/schemathesis.sh` runs a small OpenAPI contract check against the live API.
 - `/reports/weekly` is the documented EX3 enhancement.
@@ -37,6 +37,20 @@ Health is verified through:
 
 ```bash
 curl -fsS http://127.0.0.1:8000/openapi.json >/dev/null
+```
+
+### Seed
+
+The `seed` service runs:
+
+```bash
+python scripts/seed.py
+```
+
+It waits until the API is healthy, shares the same SQLite volume, creates the demo account if needed, adds sample stocks only when missing, and exits successfully. This makes the grader flow one command:
+
+```bash
+docker compose up --build
 ```
 
 ### Redis
@@ -66,6 +80,16 @@ Every `WORKER_REFRESH_INTERVAL_SECONDS` seconds, it loads distinct saved stock s
 
 Each successful refresh writes a `MarketSnapshot` row. Failed refreshes write an error snapshot so the failure is visible during local debugging.
 
+### UI
+
+The `ui` service runs:
+
+```bash
+streamlit run ui/streamlit_app.py --server.address=0.0.0.0 --server.port=8501 --server.headless=true
+```
+
+Inside Compose, Streamlit uses `API_BASE_URL=http://api:8000`. Outside Compose, it still defaults to `http://127.0.0.1:8000`.
+
 ## Auth And Security
 
 AlphaWatch keeps its existing security model:
@@ -79,10 +103,10 @@ AlphaWatch keeps its existing security model:
 - local secrets are read from environment variables
 - SQLite database files and `.env` files are ignored by git
 
-Local compose uses:
+Local compose reads `SECRET_KEY` from the shell when provided and otherwise uses a local-only fallback:
 
 ```text
-SECRET_KEY=local-compose-secret-change-me
+SECRET_KEY=${SECRET_KEY:-local-compose-secret-change-me-32-bytes}
 ```
 
 This is intentionally simple for class/demo use. For a real local handoff, set a different value in a local `.env` file or shell environment and keep it out of git.

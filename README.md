@@ -12,7 +12,7 @@ The core product remains simple and local:
 
 EX3 adds the missing local infrastructure layer without replacing the existing dashboard:
 
-- `compose.yaml` for API, Redis, and worker
+- `compose.yaml` for API, Redis, worker, one-shot seed, and Streamlit UI
 - Redis-backed refresh idempotency
 - background worker for saved stock market refresh
 - manual refresh script
@@ -26,7 +26,7 @@ EX3 adds the missing local infrastructure layer without replacing the existing d
 ## Service Architecture
 
 ```text
-Streamlit UI (local)
+Streamlit UI
         |
         v
 FastAPI API ---- SQLite
@@ -61,16 +61,27 @@ refresh snapshots in SQLite
 
 ## Local Quick Start
 
-Install dependencies:
+For the grader/demo path, run one command:
+
+```bash
+docker compose up --build
+```
+
+Then open:
+
+- Streamlit UI: `http://localhost:8501`
+- API docs: `http://127.0.0.1:8000/docs`
+
+The compose stack automatically runs the idempotent seed script on startup. Demo login:
+
+```text
+demo@alphawatch.local / password123
+```
+
+For local development without Docker, install dependencies:
 
 ```bash
 uv sync --extra dev
-```
-
-Initialize a demo database:
-
-```bash
-uv run python scripts/seed.py
 ```
 
 Run the backend:
@@ -90,19 +101,21 @@ Open:
 - API docs: `http://127.0.0.1:8000/docs`
 - Streamlit: `http://localhost:8501`
 
-Demo login:
+Initialize local demo data when not using compose:
 
-```text
-demo@alphawatch.local / password123
+```bash
+uv run python scripts/seed.py
 ```
 
 ## Compose Stack
 
-The EX3 compose stack runs the infrastructure services:
+The EX3 compose stack runs the full local app:
 
 - `api`: FastAPI backend
 - `redis`: Redis 7 for refresh idempotency
+- `seed`: one-shot idempotent demo database setup
 - `worker`: background refresh worker
+- `ui`: Streamlit frontend at `http://localhost:8501`
 
 Start it:
 
@@ -110,22 +123,12 @@ Start it:
 docker compose up --build
 ```
 
-Seed the compose database from another terminal:
-
-```bash
-docker compose exec api python scripts/seed.py
-```
+The `seed` service runs `python scripts/seed.py` once after the API is healthy. It is safe to rerun because it does not duplicate the demo user or sample stocks.
 
 Stop it:
 
 ```bash
 docker compose down
-```
-
-Streamlit is still run locally:
-
-```bash
-uv run streamlit run ui/streamlit_app.py
 ```
 
 See [docs/runbooks/compose.md](docs/runbooks/compose.md) for the full runbook.
@@ -252,7 +255,9 @@ AlphaWatch does not currently expose rate-limit headers because it does not incl
 
 AlphaWatch creates tables on startup through SQLModel metadata.
 
-For reproducible demo data:
+For Docker Compose, the `seed` service runs automatically on startup.
+
+For local development without Compose:
 
 ```bash
 uv run python scripts/seed.py
@@ -300,7 +305,9 @@ ALPHA_WATCH/
 │   └── runbooks/compose.md
 ├── scripts/
 │   ├── demo.sh
+│   ├── local_ci.sh
 │   ├── refresh.py
+│   ├── schemathesis.sh
 │   └── seed.py
 ├── tests/
 ├── ui/

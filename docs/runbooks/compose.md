@@ -8,13 +8,9 @@ This runbook verifies the local EX3 stack: FastAPI API, Redis, worker, SQLite pe
 
 - FastAPI API at `http://127.0.0.1:8000`
 - Redis at `localhost:6379`
+- one-shot seed service that initializes the demo account and sample watchlist
 - background worker using the same SQLite volume as the API
-
-Streamlit stays local by default:
-
-```bash
-uv run streamlit run ui/streamlit_app.py
-```
+- Streamlit UI at `http://localhost:8501`
 
 ## Fresh Clone Setup
 
@@ -34,16 +30,23 @@ The local CI script runs Python syntax checks, pytest, compose config validation
 
 ## Launch The Stack
 
-Start API, Redis, and worker:
+Start API, Redis, seed, worker, and UI:
 
 ```bash
 docker compose up --build
 ```
 
-Seed the compose SQLite volume from a second terminal:
+The `seed` service runs automatically after the API is healthy. It exits successfully after creating the demo account and sample stocks. It is idempotent, so repeated compose starts do not duplicate data.
 
-```bash
-docker compose exec api python scripts/seed.py
+Open the app:
+
+- Streamlit UI: `http://localhost:8501`
+- API docs: `http://127.0.0.1:8000/docs`
+
+Demo login:
+
+```text
+demo@alphawatch.local / password123
 ```
 
 Stop the stack:
@@ -109,7 +112,7 @@ refresh cycle complete: symbols=3 refreshed=3 skipped=0 errors=0
 If no stocks exist yet, run:
 
 ```bash
-docker compose exec api python scripts/seed.py
+docker compose run --rm seed
 ```
 
 You can also run one manual refresh and then watch the worker continue on its interval:
@@ -118,13 +121,7 @@ You can also run one manual refresh and then watch the worker continue on its in
 uv run python scripts/refresh.py AAPL MSFT --concurrency 2 --retries 2
 ```
 
-## Run The Streamlit Dashboard
-
-In a second terminal:
-
-```bash
-uv run streamlit run ui/streamlit_app.py
-```
+## Verify Streamlit UI
 
 Open:
 
@@ -177,7 +174,6 @@ Recommended full verification flow:
 ```bash
 uv sync --extra dev
 docker compose up --build
-docker compose exec api python scripts/seed.py
 uv run scripts/local_ci.sh
 ```
 
@@ -189,7 +185,6 @@ uv run python -m compileall app scripts tests
 uv run pytest
 docker compose config
 docker compose up -d --build
-docker compose exec -T api python scripts/seed.py
 uv run scripts/schemathesis.sh
 docker compose down
 ```
