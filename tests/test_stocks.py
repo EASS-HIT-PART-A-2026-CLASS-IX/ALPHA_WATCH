@@ -166,15 +166,12 @@ def test_two_users_can_hold_same_symbol(client: TestClient) -> None:
 # ── company lookup ───────────────────────────────────────────────────────────
 
 def test_lookup_stock_company(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
-    class FakeResponse:
-        def raise_for_status(self) -> None:
-            pass
+    class FakeTicker:
+        @property
+        def info(self):
+            return {"longName": "Tesla, Inc.", "sector": "Consumer Cyclical"}
 
-        def json(self) -> dict:
-            return {"Symbol": "TSLA", "Name": "Tesla, Inc.", "Sector": "Consumer Cyclical"}
-
-    monkeypatch.setenv("ALPHAVANTAGE_API_KEY", "test-key")
-    monkeypatch.setattr("app.company_lookup.requests.get", lambda *a, **kw: FakeResponse())
+    monkeypatch.setattr("app.company_lookup._yf_ticker", lambda sym: FakeTicker())
 
     token = register_and_login(client, "alice@test.com")
     resp = client.get("/stocks/lookup/tsla", headers=auth(token))
@@ -183,8 +180,15 @@ def test_lookup_stock_company(client: TestClient, monkeypatch: pytest.MonkeyPatc
     assert resp.json() == {"symbol": "TSLA", "company_name": "Tesla, Inc.", "sector": "Consumer Cyclical"}
 
 
-def test_lookup_without_api_key_returns_503(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("ALPHAVANTAGE_API_KEY", raising=False)
+def test_lookup_not_found_returns_404(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    """When yfinance returns no name (unknown ticker), the lookup returns 404."""
+    class FakeTicker:
+        @property
+        def info(self):
+            return {}
+
+    monkeypatch.setattr("app.company_lookup._yf_ticker", lambda sym: FakeTicker())
+
     token = register_and_login(client, "alice@test.com")
-    resp = client.get("/stocks/lookup/TSLA", headers=auth(token))
-    assert resp.status_code == 503
+    resp = client.get("/stocks/lookup/FAKEXYZ", headers=auth(token))
+    assert resp.status_code == 404

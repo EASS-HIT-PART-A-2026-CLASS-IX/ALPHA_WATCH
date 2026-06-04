@@ -1,8 +1,6 @@
-import os
-
-import requests
-
-ALPHA_VANTAGE_BASE_URL = "https://www.alphavantage.co/query"
+"""
+company_lookup.py — yfinance-based company lookup, no API key required.
+"""
 
 
 class CompanyLookupConfigError(Exception):
@@ -17,58 +15,32 @@ class CompanyLookupServiceError(Exception):
     pass
 
 
-def _get_api_key() -> str:
-    key = os.getenv("ALPHAVANTAGE_API_KEY")
-    if not key:
-        raise CompanyLookupConfigError("ALPHAVANTAGE_API_KEY is not configured")
-    return key
-
-
-def _av_get(params: dict) -> dict:
-    """Make a GET request to Alpha Vantage and return parsed JSON."""
+def _yf_ticker(symbol: str):
+    """Lazy-import yfinance so the rest of the app starts even if it's missing."""
     try:
-        response = requests.get(ALPHA_VANTAGE_BASE_URL, params=params, timeout=10)
-        response.raise_for_status()
-        return response.json()
-    except requests.RequestException as error:
-        raise CompanyLookupServiceError("External request failed") from error
-    except ValueError as error:
-        raise CompanyLookupServiceError("External API returned invalid JSON") from error
+        import yfinance as yf
+    except ImportError as e:
+        raise CompanyLookupConfigError("yfinance is not installed") from e
+    return yf.Ticker(symbol)
 
 
 def lookup_company_by_symbol(symbol: str) -> dict:
-    """Used by /stocks/lookup — returns symbol, company_name, sector only."""
+    """Returns symbol, company_name, sector — used by /stocks/lookup."""
     clean = symbol.strip().upper()
-    data = _av_get({"function": "OVERVIEW", "symbol": clean, "apikey": _get_api_key()})
+    try:
+        ticker = _yf_ticker(clean)
+        info = ticker.info or {}
+    except CompanyLookupConfigError:
+        raise
+    except Exception as exc:
+        raise CompanyLookupServiceError(f"Lookup request failed: {exc}") from exc
 
-    company_name = data.get("Name")
-    if not company_name:
+    name = info.get("longName") or info.get("shortName")
+    if not name:
         raise CompanyLookupNotFoundError(f"Company not found for symbol '{clean}'")
 
     return {
-        "symbol": data.get("Symbol", clean).upper(),
-        "company_name": company_name,
-        "sector": data.get("Sector") or "Unknown",
-    }
-
-
-def fetch_company_overview(symbol: str) -> dict:
-    """Used by /market/profile — returns the full richer profile."""
-    clean = symbol.strip().upper()
-    data = _av_get({"function": "OVERVIEW", "symbol": clean, "apikey": _get_api_key()})
-
-    company_name = data.get("Name")
-    if not company_name:
-        raise CompanyLookupNotFoundError(f"Company not found for symbol '{clean}'")
-
-    raw_cap = data.get("MarketCapitalization")
-    market_cap = int(raw_cap) if raw_cap and raw_cap.isdigit() else None
-
-    return {
-        "symbol": data.get("Symbol", clean).upper(),
-        "company_name": company_name,
-        "sector": data.get("Sector") or "Unknown",
-        "industry": data.get("Industry") or "Unknown",
-        "description": data.get("Description") or "",
-        "market_cap": market_cap,
+        "symbol": clean,
+        "company_name": name,
+        "sector": info.get("sector") or "Unknown",
     }

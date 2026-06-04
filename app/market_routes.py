@@ -1,25 +1,22 @@
 """
 market_routes.py
 
-Each endpoint tries to fetch real data from Alpha Vantage.
-If the API key is missing OR the external request fails for any reason,
-it falls back to built-in mock data instead of returning an error.
-The response always includes source_mode: "live" | "mock" so the UI
-can optionally show a banner when demo data is being used.
+Uses yfinance (free, no API key) as the primary market data provider.
+Falls back to built-in mock data when the call fails or returns empty.
+Every response includes source_mode: "live" | "mock".
+
+Key design notes:
+- Quote uses ticker.fast_info (fast, lightweight, doesn't hit slow endpoints)
+- Profile uses ticker.info (full info, slower but only needed for description/sector)
+- History uses ticker.history() (reliable daily candles)
+- News uses ticker.news (reliable)
 """
 import logging
+from datetime import datetime
 
 from fastapi import APIRouter, Depends
 
 from app.auth import get_current_user
-from app.company_lookup import (
-    CompanyLookupConfigError,
-    CompanyLookupNotFoundError,
-    CompanyLookupServiceError,
-    _av_get,
-    _get_api_key,
-    fetch_company_overview,
-)
 from app.mock_data import mock_history, mock_news, mock_profile, mock_quote
 from app.models import User
 from app.schemas import (
@@ -32,7 +29,6 @@ from app.schemas import (
 )
 
 logger = logging.getLogger(__name__)
-
 router = APIRouter(prefix="/market", tags=["market"])
 
 
@@ -40,130 +36,222 @@ def _sym(raw: str) -> str:
     return raw.strip().upper()
 
 
+def _yf_ticker(symbol: str):
+    """Lazy-import yfinance."""
+    import yfinance as yf
+    return yf.Ticker(symbol)
+
+
+def _to_float(value) -> float | None:
+    """Convert a value to float, treating zero/None/NaN as None."""
+    if value is None:
+        return None
+    try:
+        f = float(value)
+        if f != f or f == 0:  # NaN or zero
+            return None
+        return f
+    except (TypeError, ValueError):
+        return None
+
+
 # ── Profile ───────────────────────────────────────────────────────────────────
 
 @router.get("/profile/{symbol}", response_model=MarketProfileRead)
-def get_market_profile(
-    symbol: str,
-    _user: User = Depends(get_current_user),
-) -> MarketProfileRead:
-    """Company profile — falls back to mock when API key is absent or call fails."""
+def get_market_profile(symbol: str, _user: User = Depends(get_current_user)) -> MarketProfileRead:
     sym = _sym(symbol)
     try:
-        data = fetch_company_overview(sym)
-        return MarketProfileRead(**data, source_mode="live")
-    except (CompanyLookupConfigError, CompanyLookupNotFoundError, CompanyLookupServiceError) as exc:
-        logger.info("Profile fallback for %s: %s", sym, exc)
+        ticker = _yf_ticker(sym)
+        info = ticker.info or {}
+        name = info.get("longName") or info.get("shortName")
+        if not name:
+            raise ValueError(f"No profile name for {sym}")
+
+        market_cap_raw = info.get("marketCap")
+        market_cap = int(market_cap_raw) if market_cap_raw else None
+
+        description = (
+            info.get("longBusinessSummary")
+            or info.get("summary")
+            or f"{name} operates in the {info.get('industry', 'N/A')} industry."
+        )
+
+        return MarketProfileRead(
+            symbol=sym,
+            company_name=name,
+            sector=info.get("sector") or "Unknown",
+            industry=info.get("industry") or "Unknown",
+            website=info.get("website") or "",
+            description=description,
+            market_cap=market_cap,
+            country=info.get("country") or "United States",
+            source_mode="live",
+        )
+    except Exception as exc:
+        logger.warning("Profile fallback for %s: %r", sym, exc)
         return MarketProfileRead(**mock_profile(sym))
 
 
 # ── Quote ─────────────────────────────────────────────────────────────────────
 
 @router.get("/quote/{symbol}", response_model=MarketQuoteRead)
-def get_quote(
-    symbol: str,
-    _user: User = Depends(get_current_user),
-) -> MarketQuoteRead:
-    """Live quote — falls back to mock when API key is absent or call fails."""
+def get_quote(symbol: str, _user: User = Depends(get_current_user)) -> MarketQuoteRead:
+    """
+    Uses ticker.fast_info — a lightweight Yahoo endpoint that returns the
+    current quote without the heavy .info call. This is reliable and fast.
+    """
     sym = _sym(symbol)
     try:
-        api_key = _get_api_key()
-        data = _av_get({"function": "GLOBAL_QUOTE", "symbol": sym, "apikey": api_key})
-        quote = data.get("Global Quote", {})
-        price_raw = quote.get("05. price")
-        if not price_raw:
-            raise CompanyLookupNotFoundError(f"No quote for '{sym}'")
+        ticker = _yf_ticker(sym)
+        fast = ticker.fast_info
 
-        def _f(key: str) -> float:
-            raw = quote.get(key, "0").replace("%", "").strip()
-            try:
-                return float(raw)
-            except ValueError:
-                return 0.0
+        # fast_info is a dict-like with attribute access. Try both forms.
+        def _get(*keys):
+            for k in keys:
+                # try as attribute
+                try:
+                    v = getattr(fast, k, None)
+                    if v is not None:
+                        return v
+                except Exception:
+                    pass
+                # try as key
+                try:
+                    v = fast[k]
+                    if v is not None:
+                        return v
+                except Exception:
+                    pass
+            return None
+
+        price = _to_float(_get("last_price", "lastPrice", "regular_market_price"))
+        prev_close = _to_float(_get("previous_close", "previousClose", "regular_market_previous_close"))
+        open_p = _to_float(_get("open", "regular_market_open"))
+        day_high = _to_float(_get("day_high", "dayHigh", "regular_market_day_high"))
+        day_low = _to_float(_get("day_low", "dayLow", "regular_market_day_low"))
+        volume_raw = _get("last_volume", "lastVolume", "regular_market_volume")
+        volume = int(volume_raw) if volume_raw else None
+
+        if price is None:
+            raise ValueError(f"No price for {sym}")
+
+        change = round(price - prev_close, 4) if prev_close else 0.0
+        change_pct = round((change / prev_close) * 100, 4) if prev_close else 0.0
 
         return MarketQuoteRead(
             symbol=sym,
-            price=_f("05. price"),
-            change=_f("09. change"),
-            change_percent=_f("10. change percent"),
-            previous_close=_f("08. previous close") or None,
+            price=price,
+            change=change,
+            change_percent=change_pct,
+            previous_close=prev_close,
+            open=open_p,
+            day_high=day_high,
+            day_low=day_low,
+            volume=volume,
             source_mode="live",
         )
-    except (CompanyLookupConfigError, CompanyLookupNotFoundError, CompanyLookupServiceError) as exc:
-        logger.info("Quote fallback for %s: %s", sym, exc)
+    except Exception as exc:
+        logger.warning("Quote fallback for %s: %r", sym, exc)
         return MarketQuoteRead(**mock_quote(sym))
 
 
 # ── History ───────────────────────────────────────────────────────────────────
 
 @router.get("/history/{symbol}", response_model=MarketHistoryRead)
-def get_history(
-    symbol: str,
-    _user: User = Depends(get_current_user),
-) -> MarketHistoryRead:
-    """30-day price history — falls back to mock when API key is absent or call fails."""
+def get_history(symbol: str, _user: User = Depends(get_current_user)) -> MarketHistoryRead:
     sym = _sym(symbol)
     try:
-        api_key = _get_api_key()
-        data = _av_get({
-            "function": "TIME_SERIES_DAILY",
-            "symbol": sym,
-            "outputsize": "compact",
-            "apikey": api_key,
-        })
-        time_series = data.get("Time Series (Daily)")
-        if not time_series:
-            raise CompanyLookupNotFoundError(f"No history for '{sym}'")
+        ticker = _yf_ticker(sym)
+        hist = ticker.history(period="1mo", auto_adjust=False)
+        if hist is None or hist.empty:
+            raise ValueError(f"Empty history for {sym}")
 
-        sorted_dates = sorted(time_series.keys(), reverse=True)[:30]
-        series = [
-            HistoryPoint(date=d, close=float(time_series[d]["4. close"]))
-            for d in reversed(sorted_dates)
-        ]
-        return MarketHistoryRead(symbol=sym, series=series, source_mode="live")
-    except (CompanyLookupConfigError, CompanyLookupNotFoundError, CompanyLookupServiceError) as exc:
-        logger.info("History fallback for %s: %s", sym, exc)
+        series = []
+        for idx, row in hist.iterrows():
+            try:
+                close = float(row["Close"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if close != close:  # NaN
+                continue
+            ts = idx.date().isoformat() if hasattr(idx, "date") else str(idx)[:10]
+            series.append(HistoryPoint(timestamp=ts, close=round(close, 4)))
+
+        if not series:
+            raise ValueError(f"No usable history rows for {sym}")
+
+        series = series[-30:]
+        return MarketHistoryRead(symbol=sym, interval="1day", range="30d", series=series, source_mode="live")
+    except Exception as exc:
+        logger.warning("History fallback for %s: %r", sym, exc)
         raw = mock_history(sym)
         series = [HistoryPoint(**p) for p in raw["series"]]
-        return MarketHistoryRead(symbol=sym, series=series, source_mode="mock")
+        return MarketHistoryRead(symbol=sym, interval="1day", range="30d", series=series, source_mode="mock")
 
 
 # ── News ──────────────────────────────────────────────────────────────────────
 
 @router.get("/news/{symbol}", response_model=MarketNewsRead)
-def get_news(
-    symbol: str,
-    _user: User = Depends(get_current_user),
-) -> MarketNewsRead:
-    """Recent news — falls back to mock when API key is absent or call fails."""
+def get_news(symbol: str, _user: User = Depends(get_current_user)) -> MarketNewsRead:
     sym = _sym(symbol)
     try:
-        api_key = _get_api_key()
-        data = _av_get({
-            "function": "NEWS_SENTIMENT",
-            "tickers": sym,
-            "limit": 10,
-            "apikey": api_key,
-        })
-        feed = data.get("feed", [])
+        ticker = _yf_ticker(sym)
+        raw_news = ticker.news or []
+        if not raw_news:
+            raise ValueError(f"No news for {sym}")
+
         items = []
-        for article in feed[:10]:
-            raw_dt = article.get("time_published", "")
-            published_at = (
-                f"{raw_dt[:4]}-{raw_dt[4:6]}-{raw_dt[6:8]} {raw_dt[9:11]}:{raw_dt[11:13]}"
-                if len(raw_dt) >= 13
-                else raw_dt
-            )
-            items.append(NewsItem(
-                title=article.get("title", ""),
-                source=article.get("source", ""),
-                published_at=published_at,
-                url=article.get("url", ""),
-                summary=article.get("summary") or None,
-            ))
+        for article in raw_news[:10]:
+            # yfinance returns dicts in 2 shapes — try both
+            content = article.get("content") if isinstance(article.get("content"), dict) else article
+
+            title = content.get("title") or article.get("title") or ""
+
+            # URL: try multiple possible locations
+            url = ""
+            for url_key in ("canonicalUrl", "clickThroughUrl"):
+                u = content.get(url_key)
+                if isinstance(u, dict):
+                    url = u.get("url", "") or url
+                elif isinstance(u, str):
+                    url = u or url
+            url = url or content.get("link") or article.get("link") or ""
+
+            # Source
+            provider = content.get("provider")
+            if isinstance(provider, dict):
+                source = provider.get("displayName", "Yahoo Finance")
+            else:
+                source = article.get("publisher") or "Yahoo Finance"
+
+            # Published time
+            pub_date = ""
+            pub_raw = content.get("pubDate") or content.get("displayTime")
+            if pub_raw and isinstance(pub_raw, str):
+                pub_date = pub_raw[:16].replace("T", " ")
+            elif article.get("providerPublishTime"):
+                try:
+                    pub_date = datetime.fromtimestamp(int(article["providerPublishTime"])).strftime("%Y-%m-%d %H:%M")
+                except (TypeError, ValueError):
+                    pub_date = ""
+
+            summary = content.get("summary") or content.get("description") or None
+
+            if title and url:
+                items.append(NewsItem(
+                    title=title,
+                    source=source,
+                    published_at=pub_date,
+                    url=url,
+                    summary=summary,
+                ))
+
+        if not items:
+            raise ValueError(f"No usable news items for {sym}")
+
         return MarketNewsRead(symbol=sym, items=items, source_mode="live")
-    except (CompanyLookupConfigError, CompanyLookupServiceError) as exc:
-        logger.info("News fallback for %s: %s", sym, exc)
+    except Exception as exc:
+        logger.warning("News fallback for %s: %r", sym, exc)
         raw = mock_news(sym)
         items = [NewsItem(**i) for i in raw["items"]]
         return MarketNewsRead(symbol=sym, items=items, source_mode="mock")
