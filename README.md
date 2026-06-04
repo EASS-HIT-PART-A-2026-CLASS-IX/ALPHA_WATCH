@@ -1,112 +1,200 @@
-# AlphaWatch 📈
+# AlphaWatch
 
-A personal stock research terminal built with FastAPI, SQLite, JWT auth, and Streamlit.
-Uses **Yahoo Finance** (via the `yfinance` library) for real-time market data — **no API key required**.
+AlphaWatch is a personal stock research dashboard built with FastAPI, SQLite, JWT auth, SQLModel, Streamlit, and Yahoo Finance.
 
----
+The core product remains simple and local:
+
+- register and log in
+- keep a private stock watchlist
+- add, edit, favorite, and delete stocks
+- view live quote, profile, history, and news data
+- continue working when Yahoo Finance is unavailable through mock fallback data
+
+EX3 adds the missing local infrastructure layer without replacing the existing dashboard:
+
+- `compose.yaml` for API, Redis, and worker
+- Redis-backed refresh idempotency
+- background worker for saved stock market refresh
+- manual refresh script
+- reproducible database seed script
+- local demo script
+- EX3 docs and compose runbook
+- weekly markdown stock summary report enhancement
+
+## Service Architecture
+
+```text
+Streamlit UI (local)
+        |
+        v
+FastAPI API ---- SQLite
+        |
+        v
+Yahoo Finance with mock fallback
+
+Worker ---- Redis idempotency
+   |
+   v
+refresh snapshots in SQLite
+```
 
 ## Features
 
-| | Feature |
+| Status | Feature |
 |---|---|
-| ✅ | SQLite persistence via SQLModel |
-| ✅ | User registration, login, JWT auth |
-| ✅ | Per-user stock isolation |
-| ✅ | Admin role + admin-only route |
-| ✅ | Full stock CRUD |
-| ✅ | Company symbol auto-fill via yfinance |
-| ✅ | Live quote, profile, history (30 days), news |
-| ✅ | Automatic mock fallback if yfinance is unreachable |
-| ✅ | Dashboard with metrics, charts, watchlist overview |
-| ✅ | Stock Details page with full quote stats, price chart, news |
+| yes | SQLite persistence via SQLModel |
+| yes | User registration, login, JWT auth |
+| yes | Per-user stock isolation |
+| yes | Admin role and admin-only route |
+| yes | Stock CRUD |
+| yes | Company symbol lookup |
+| yes | Yahoo Finance quote, profile, history, and news |
+| yes | Mock fallback for offline or failed market calls |
+| yes | Streamlit dashboard, watchlist, add stock, and stock details |
+| yes | Redis-backed refresh idempotency |
+| yes | Async worker with bounded concurrency and retries |
+| yes | Manual refresh script |
+| yes | Reproducible database seed script |
+| yes | Weekly markdown report enhancement |
 
----
+## Local Quick Start
 
-## Quick Start
-
-### 1. Install
-
-```bash
-pip install -e ".[dev]"
-```
-
-### 2. Run the backend
+Install dependencies:
 
 ```bash
-uvicorn app.main:app --reload
+uv sync --extra dev
 ```
 
-API: `http://127.0.0.1:8000` · Docs: `http://127.0.0.1:8000/docs`
-
-### 3. Run the frontend
+Initialize a demo database:
 
 ```bash
-streamlit run ui/streamlit_app.py
+uv run python scripts/seed.py
 ```
 
-Opens at `http://localhost:8501`. Register an account on first visit.
+Run the backend:
 
-**That's it — no API keys, no environment variables, no secrets.**
-
----
-
-## Data source: Yahoo Finance
-
-AlphaWatch uses the [`yfinance`](https://github.com/ranaroussi/yfinance) Python package, which is a free, unofficial Yahoo Finance API.
-
-| | Value |
-|---|---|
-| Cost | Free |
-| API key | Not required |
-| Rate limit | Effectively unlimited for normal use |
-| Real-time quotes | Yes (delayed ~15 min for most exchanges) |
-| Historical data | Yes (years of daily data) |
-| Company news | Yes |
-
-If Yahoo Finance is temporarily unreachable, the app automatically falls back to realistic built-in mock data for AAPL, MSFT, NVDA, TSLA, AMZN, META, GOOGL, AMD, PLTR — and generic data for any other symbol.
-
----
-
-## Pages
-
-### Dashboard
-- Total stocks, favorites, average score
-- Top gainer / top loser from your watchlist (live)
-- Sector allocation chart + score ranking chart
-- Watchlist overview table with live prices
-
-### Watchlist
-- Each stock shows: price, daily change %, target price, personal score
-- Expanded view: prev close, open, high, low, volume, thesis
-- Edit and delete inline
-
-### Add Stock
-- Symbol lookup auto-fills company name and sector
-- Duplicate symbol check
-- Validation errors and success messages
-
-### Stock Details
-- Large price display with green/red movement
-- Full quote stats grid (open, high, low, volume, prev close)
-- Company profile with market cap, industry, country, website, description
-- 30-day price chart
-- Latest news cards with summaries
-- Your personal notes: target price, score, thesis, favorite
-
----
-
-## API endpoints
-
-### Auth
+```bash
+uv run uvicorn app.main:app --reload
 ```
-POST /auth/register   { "email": "...", "password": "..." }
-POST /auth/login      form-data: username=... password=...
+
+Run the dashboard:
+
+```bash
+uv run streamlit run ui/streamlit_app.py
+```
+
+Open:
+
+- API docs: `http://127.0.0.1:8000/docs`
+- Streamlit: `http://localhost:8501`
+
+Demo login:
+
+```text
+demo@alphawatch.local / password123
+```
+
+## Compose Stack
+
+The EX3 compose stack runs the infrastructure services:
+
+- `api`: FastAPI backend
+- `redis`: Redis 7 for refresh idempotency
+- `worker`: background refresh worker
+
+Start it:
+
+```bash
+docker compose up --build
+```
+
+Seed the compose database from another terminal:
+
+```bash
+docker compose exec api python scripts/seed.py
+```
+
+Stop it:
+
+```bash
+docker compose down
+```
+
+Streamlit is still run locally:
+
+```bash
+uv run streamlit run ui/streamlit_app.py
+```
+
+See [docs/runbooks/compose.md](docs/runbooks/compose.md) for the full runbook.
+
+## Redis And Worker
+
+The worker runs independently from the API:
+
+```bash
+python -m app.worker
+```
+
+It refreshes saved stock symbols and stores market snapshots. Each symbol gets a Redis idempotency key such as:
+
+```text
+alphawatch:refresh:AAPL
+```
+
+That key prevents duplicate refresh work when the worker and manual script run at the same time. Keys expire automatically if a process exits unexpectedly.
+
+## Manual Refresh
+
+Refresh all saved symbols:
+
+```bash
+uv run python scripts/refresh.py
+```
+
+Refresh selected symbols:
+
+```bash
+uv run python scripts/refresh.py AAPL MSFT --concurrency 2 --retries 2
+```
+
+The script uses the same bounded concurrency, retry, Redis idempotency, Yahoo Finance, and mock fallback flow as the worker.
+
+## Yahoo Finance And Mock Fallback
+
+AlphaWatch uses `yfinance` for market data and requires no API key.
+
+Every market endpoint returns a `source_mode` value:
+
+- `live`: data came from Yahoo Finance
+- `mock`: the fallback data was used
+
+This keeps the product usable in class demos, offline testing, and temporary Yahoo Finance failures.
+
+## EX3 Enhancement
+
+The implemented enhancement is a weekly markdown stock summary report:
+
+```text
+GET /reports/weekly
+```
+
+It combines the logged-in user's watchlist with the latest background refresh snapshot. The report includes saved stocks, favorites, personal scores, target prices, thesis notes, latest price, daily move, source mode, and refresh time.
+
+## API Endpoints
+
+Auth:
+
+```text
+POST /auth/register
+POST /auth/login
 GET  /auth/me
-GET  /auth/admin/users   (admin only)
+GET  /auth/admin/users
 ```
 
-### Stocks (JWT required)
-```
+Stocks:
+
+```text
 GET    /stocks
 POST   /stocks
 GET    /stocks/{id}
@@ -115,71 +203,94 @@ DELETE /stocks/{id}
 GET    /stocks/lookup/{symbol}
 ```
 
-### Market (JWT required, always returns data)
-```
-GET /market/profile/{symbol}   → symbol, company_name, sector, industry, website, description, market_cap, country, source_mode
-GET /market/quote/{symbol}     → price, change, change_percent, open, day_high, day_low, volume, previous_close, source_mode
-GET /market/history/{symbol}   → interval, range, series[{timestamp, close}], source_mode
-GET /market/news/{symbol}      → items[{title, source, published_at, url, summary}], source_mode
+Market:
+
+```text
+GET /market/profile/{symbol}
+GET /market/quote/{symbol}
+GET /market/history/{symbol}
+GET /market/news/{symbol}
 ```
 
-`source_mode` is `"live"` (Yahoo Finance) or `"mock"` (offline fallback).
+Reports:
 
----
+```text
+GET /reports/weekly
+```
+
+## Demo Script
+
+Print the local demo walkthrough:
+
+```bash
+./scripts/demo.sh
+```
+
+The script guides a grader through setup, login, adding/viewing stocks, opening details, seeing market data, checking worker logs, and running the report.
+
+## Database Setup
+
+AlphaWatch creates tables on startup through SQLModel metadata.
+
+For reproducible demo data:
+
+```bash
+uv run python scripts/seed.py
+```
+
+The repository does not commit SQLite database artifacts. Database files are ignored by git.
 
 ## Tests
 
+Run all tests:
+
 ```bash
-pytest
+uv run pytest
 ```
 
-No network needed — all `yfinance` calls are mocked.
+Tests cover:
 
-### Coverage
-- Auth: register, login, protected routes, expired token, role enforcement
-- Stock CRUD: all operations + user isolation
-- Market profile: live shape, uppercase normalisation, fallback on yfinance failure, unknown symbol
-- Market quote: live shape (all fields), fallback
-- Market history: ascending series, 30-point mock, fallback on empty history
-- Market news: live items, empty feed, fallback, symbol in titles
+- auth
+- stock CRUD and user isolation
+- market live/mock behavior
+- Redis idempotency
+- refresh retries and snapshot persistence
+- weekly markdown report enhancement
 
----
+Tests do not depend on real Yahoo Finance calls.
 
-## Project structure
+## Project Structure
 
-```
+```text
 ALPHA_WATCH/
 ├── app/
-│   ├── auth.py              # bcrypt, JWT, dependencies
-│   ├── auth_routes.py       # /auth/*
-│   ├── company_lookup.py    # yfinance-based lookup
-│   ├── database.py          # SQLite engine + session
-│   ├── main.py              # FastAPI app + lifespan
-│   ├── market_routes.py     # /market/* — yfinance with auto-fallback
-│   ├── mock_data.py         # symbol-aware demo data
-│   ├── models.py            # SQLModel: User, Stock
-│   ├── routes.py            # /stocks CRUD
-│   └── schemas.py           # Pydantic schemas
+│   ├── auth.py
+│   ├── auth_routes.py
+│   ├── database.py
+│   ├── main.py
+│   ├── market_routes.py
+│   ├── models.py
+│   ├── refresh.py
+│   ├── redis_client.py
+│   ├── reports.py
+│   ├── routes.py
+│   └── worker.py
+├── docs/
+│   ├── EX3-notes.md
+│   └── runbooks/compose.md
+├── scripts/
+│   ├── demo.sh
+│   ├── refresh.py
+│   └── seed.py
 ├── tests/
-│   ├── conftest.py
-│   ├── test_auth.py
-│   ├── test_market.py
-│   └── test_stocks.py
 ├── ui/
-│   └── streamlit_app.py     # Dashboard, Watchlist, Add Stock, Stock Details
-├── .gitignore
+│   └── streamlit_app.py
+├── compose.yaml
+├── Dockerfile
 ├── pyproject.toml
 └── README.md
 ```
 
----
-
 ## AI Assistance
 
-Claude (Anthropic) was used for:
-- Switching the data provider from Alpha Vantage → Finnhub → yfinance
-- Designing the live/mock fallback architecture and `source_mode` field
-- Streamlit dashboard layout, CSS theming, and card components
-- Writing pytest coverage for both live and fallback code paths
-
-All generated code was reviewed, understood, and adapted before committing.
+AI assistance was used to implement and document the EX3 infrastructure layer: compose services, Redis idempotency, async refresh worker, manual refresh script, seed/demo scripts, tests, runbooks, and the weekly markdown report enhancement. The existing AlphaWatch product structure was preserved rather than rebuilt.

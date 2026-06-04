@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from typing import List, Optional
 
 from sqlmodel import Field, Relationship, SQLModel
@@ -24,3 +25,19 @@ class Stock(SQLModel, table=True):
     user_id: int = Field(foreign_key="user.id")
 
     owner: Optional["User"] = Relationship(back_populates="stocks")
+
+
+class MarketSnapshot(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    symbol: str = Field(index=True)
+    refreshed_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), index=True)
+    status: str = Field(default="ok")
+    quote_source_mode: str = Field(default="mock")
+    profile_source_mode: str = Field(default="mock")
+    history_source_mode: str = Field(default="mock")
+    news_source_mode: str = Field(default="mock")
+    quote_json: str = Field(default="")
+    profile_json: str = Field(default="")
+    history_json: str = Field(default="")
+    news_json: str = Field(default="")
+    error: Optional[str] = None

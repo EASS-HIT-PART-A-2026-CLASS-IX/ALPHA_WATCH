@@ -30,3 +30,8 @@ def client_fixture(session: Session):
     app.dependency_overrides[get_session] = get_session_override
     yield TestClient(app)
     app.dependency_overrides.clear()
+
+
+@pytest.fixture
+def anyio_backend():
+    return "asyncio"

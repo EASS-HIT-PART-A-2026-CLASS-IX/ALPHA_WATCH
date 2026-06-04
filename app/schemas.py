@@ -78,8 +78,10 @@ class MarketProfileRead(BaseModel):
     company_name: str
     sector: str
     industry: str
+    website: str = ""
     description: str
     market_cap: Optional[int] = None
+    country: str = "United States"
     source_mode: SourceMode = "live"
 
 
@@ -89,16 +91,22 @@ class MarketQuoteRead(BaseModel):
     change: float
     change_percent: float
     previous_close: Optional[float] = None
+    open: Optional[float] = None
+    day_high: Optional[float] = None
+    day_low: Optional[float] = None
+    volume: Optional[int] = None
     source_mode: SourceMode = "live"
 
 
 class HistoryPoint(BaseModel):
-    date: str    # "YYYY-MM-DD"
+    timestamp: str
     close: float
 
 
 class MarketHistoryRead(BaseModel):
     symbol: str
+    interval: str = "1day"
+    range: str = "30d"
     series: list[HistoryPoint]
     source_mode: SourceMode = "live"
 

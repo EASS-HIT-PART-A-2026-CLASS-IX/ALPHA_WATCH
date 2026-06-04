@@ -185,7 +185,10 @@ def get_history(symbol: str, _user: User = Depends(get_current_user)) -> MarketH
     except Exception as exc:
         logger.warning("History fallback for %s: %r", sym, exc)
         raw = mock_history(sym)
-        series = [HistoryPoint(**p) for p in raw["series"]]
+        series = [
+            HistoryPoint(timestamp=p.get("timestamp") or p.get("date", ""), close=p["close"])
+            for p in raw["series"]
+        ]
         return MarketHistoryRead(symbol=sym, interval="1day", range="30d", series=series, source_mode="mock")
 
 
