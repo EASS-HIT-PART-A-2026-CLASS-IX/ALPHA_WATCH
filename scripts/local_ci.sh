@@ -4,7 +4,7 @@ set -euo pipefail
 API_BASE_URL="${API_BASE_URL:-http://127.0.0.1:8000}"
 
 echo "== Python syntax check =="
-python -m compileall app scripts tests
+python -m compileall ai_service app scripts tests ui
 
 echo
 echo "== Pytest =="

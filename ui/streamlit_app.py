@@ -8,6 +8,15 @@ import requests
 import streamlit as st
 
 API_BASE_URL = os.getenv("API_BASE_URL", "http://127.0.0.1:8000")
+AI_SERVICE_URL = os.getenv("AI_SERVICE_URL", "http://127.0.0.1:8010")
+
+HISTORY_RANGE_OPTIONS = {
+    "1D": "1d",
+    "5D": "5d",
+    "1M": "1mo",
+    "YTD": "ytd",
+    "1Y": "1y",
+}
 
 # ─────────────────────────────────────────────────────────────────────────────
 # PAGE CONFIG
@@ -80,6 +89,12 @@ details { border: 1px solid #1e2130 !important; border-radius: 8px !important; }
 .news-title { font-size: 0.95rem; font-weight: 600; color: #e8eaf0; text-decoration: none; }
 .news-meta  { font-size: 0.78rem; color: #6b7280; margin-top: 4px; }
 .news-summary { font-size: 0.83rem; color: #9ca3af; margin-top: 8px; line-height: 1.5; }
+.ai-card { background:#0f1117; border:1px solid #263244; border-radius:8px; padding:16px 20px; margin-bottom:14px; }
+.sentiment-bullish { background:#052e16; color:#4ade80; padding:3px 9px; border-radius:4px; font-size:0.76rem; font-weight:700; }
+.sentiment-neutral { background:#1e293b; color:#cbd5e1; padding:3px 9px; border-radius:4px; font-size:0.76rem; font-weight:700; }
+.sentiment-bearish { background:#450a0a; color:#f87171; padding:3px 9px; border-radius:4px; font-size:0.76rem; font-weight:700; }
+.ai-copy { font-size:0.9rem; color:#cbd5e1; line-height:1.55; }
+.ai-list { font-size:0.86rem; color:#9ca3af; line-height:1.55; margin-top:8px; }
 .page-title { font-size: 1.8rem; font-weight: 700; color: #e8eaf0; margin-bottom: 4px; }
 .page-sub   { font-size: 0.9rem; color: #6b7280; margin-bottom: 20px; }
 </style>
@@ -173,14 +188,32 @@ def api_profile(symbol: str) -> dict:
     return r.json()
 
 
-def api_history(symbol: str) -> dict:
-    r = requests.get(f"{API_BASE_URL}/market/history/{symbol}", headers=_h(), timeout=10)
+def api_history(symbol: str, history_range: str = "1mo") -> dict:
+    r = requests.get(
+        f"{API_BASE_URL}/market/history/{symbol}",
+        params={"range": history_range},
+        headers=_h(),
+        timeout=10,
+    )
     r.raise_for_status()
     return r.json()
 
 
 def api_news(symbol: str) -> dict:
     r = requests.get(f"{API_BASE_URL}/market/news/{symbol}", headers=_h(), timeout=10)
+    r.raise_for_status()
+    return r.json()
+
+
+def api_ai_brief(symbol: str, quote: dict, profile: dict, news_items: list[dict], thesis: str) -> dict:
+    payload = {
+        "symbol": symbol,
+        "quote": quote,
+        "profile": profile,
+        "news_items": news_items[:5],
+        "thesis": thesis,
+    }
+    r = requests.post(f"{AI_SERVICE_URL}/ai/stock-brief", json=payload, timeout=10)
     r.raise_for_status()
     return r.json()
 
@@ -668,6 +701,7 @@ def show_stock_details(stock: dict) -> None:
         src    = _source_badge(quote.get("source_mode", "mock"))
         is_mock_quote = quote.get("source_mode") == "mock"
     except Exception:
+        quote = {}
         price = chg = chgp = 0.0
         cls = "flat"; arrow = "—"; src = ""; is_mock_quote = True
 
@@ -733,6 +767,7 @@ def show_stock_details(stock: dict) -> None:
 
     with profile_col:
         st.markdown("**Company Profile**")
+        profile = {}
         try:
             profile = api_profile(sym)
             cap_str = _fmt_cap(profile.get("market_cap"))
@@ -761,16 +796,56 @@ def show_stock_details(stock: dict) -> None:
 
     st.markdown("<hr style='border-color:#1e2130; margin:18px 0;'>", unsafe_allow_html=True)
 
+    # ── AI brief ──────────────────────────────────────────────────────────────
+    st.markdown("**AI Brief**")
+    try:
+        brief_news = api_news(sym).get("items", [])
+        brief = api_ai_brief(sym, quote, profile, brief_news, stock.get("thesis", ""))
+        sentiment = brief.get("sentiment", "neutral")
+        sentiment_class = f"sentiment-{sentiment}" if sentiment in {"bullish", "neutral", "bearish"} else "sentiment-neutral"
+        takeaways = "".join(f"<li>{item}</li>" for item in brief.get("takeaways", []))
+        risks = "".join(f"<li>{item}</li>" for item in brief.get("risks", []))
+        mode = brief.get("source_mode", "mock")
+        mode_label = "Demo AI" if mode == "mock" else "Live AI"
+        st.markdown(
+            f"<div class='ai-card'>"
+            f"<div style='margin-bottom:10px;'>"
+            f"<span class='{sentiment_class}'>{sentiment.upper()}</span>"
+            f"&nbsp;&nbsp;<span class='badge-mock'>{mode_label}</span>"
+            f"</div>"
+            f"<div class='ai-copy'>{brief.get('summary', '')}</div>"
+            f"<div style='display:grid; grid-template-columns:1fr 1fr; gap:20px; margin-top:14px;'>"
+            f"<div><span class='stat-label'>Key Takeaways</span><ul class='ai-list'>{takeaways}</ul></div>"
+            f"<div><span class='stat-label'>Key Risks</span><ul class='ai-list'>{risks}</ul></div>"
+            f"</div>"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+    except requests.RequestException as exc:
+        _err("Could not load AI brief.", exc)
+
+    st.markdown("<hr style='border-color:#1e2130; margin:18px 0;'>", unsafe_allow_html=True)
+
     # ── price history chart ───────────────────────────────────────────────────
-    st.markdown("**Price History — Last 30 Trading Days**")
+    chart_title_col, range_col = st.columns([2.4, 1])
+    chart_title_col.markdown("**Price History**")
+    selected_label = range_col.radio(
+        "Range",
+        list(HISTORY_RANGE_OPTIONS.keys()),
+        index=2,
+        horizontal=True,
+        label_visibility="collapsed",
+        key=f"history_range_{sym}",
+    )
+    selected_range = HISTORY_RANGE_OPTIONS[selected_label]
     try:
         import pandas as pd
 
-        hist = api_history(sym)
+        hist = api_history(sym, selected_range)
         series = hist.get("series", [])
         mode = hist.get("source_mode", "mock")
         if mode == "mock":
-            st.caption("📋 Demo chart · Yahoo Finance unreachable")
+            st.caption(f"📋 Demo chart · {selected_label} · Yahoo Finance unreachable")
 
         if series:
             df = pd.DataFrame(series)

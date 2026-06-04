@@ -1,0 +1,1 @@
+"""AlphaWatch AI sidecar service."""

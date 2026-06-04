@@ -106,7 +106,7 @@ class HistoryPoint(BaseModel):
 class MarketHistoryRead(BaseModel):
     symbol: str
     interval: str = "1day"
-    range: str = "30d"
+    range: str = "1mo"
     series: list[HistoryPoint]
     source_mode: SourceMode = "live"
 

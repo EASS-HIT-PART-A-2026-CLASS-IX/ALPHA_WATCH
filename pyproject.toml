@@ -37,4 +37,4 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
-packages = ["app", "scripts"]
+packages = ["ai_service", "app", "scripts"]

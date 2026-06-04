@@ -42,6 +42,17 @@ services:
       timeout: 3s
       retries: 5
 
+  ai:
+    build: .
+    command: uvicorn ai_service.main:app --host 0.0.0.0 --port 8010
+    ports:
+      - "8010:8010"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8010/health', timeout=3)\""]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+
   worker:
     build: .
     command: python -m app.worker
@@ -65,6 +76,7 @@ services:
     command: streamlit run ui/streamlit_app.py --server.address=0.0.0.0 --server.port=8501 --server.headless=true
     environment:
       API_BASE_URL: http://api:8000
+      AI_SERVICE_URL: http://ai:8010
     ports:
       - "8501:8501"
     depends_on:
@@ -72,6 +84,8 @@ services:
         condition: service_healthy
       seed:
         condition: service_completed_successfully
+      ai:
+        condition: service_healthy
 
 volumes:
   alphawatch-data:

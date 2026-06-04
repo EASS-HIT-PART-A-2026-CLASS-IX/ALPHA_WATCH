@@ -27,12 +27,12 @@ EX3 adds the missing local infrastructure layer without replacing the existing d
 
 ```text
 Streamlit UI
-        |
-        v
-FastAPI API ---- SQLite
-        |
-        v
-Yahoo Finance with mock fallback
+   |       \
+   v        v
+AI Service  FastAPI API ---- SQLite
+             |
+             v
+        Yahoo Finance with mock fallback
 
 Worker ---- Redis idempotency
    |
@@ -51,8 +51,10 @@ refresh snapshots in SQLite
 | yes | Stock CRUD |
 | yes | Company symbol lookup |
 | yes | Yahoo Finance quote, profile, history, and news |
+| yes | Stock Details chart range selector: 1D, 5D, 1M, YTD, 1Y |
 | yes | Mock fallback for offline or failed market calls |
 | yes | Streamlit dashboard, watchlist, add stock, and stock details |
+| yes | AI sidecar microservice with deterministic stock briefs |
 | yes | Redis-backed refresh idempotency |
 | yes | Async worker with bounded concurrency and retries |
 | yes | Manual refresh script |
@@ -114,6 +116,7 @@ The EX3 compose stack runs the full local app:
 - `api`: FastAPI backend
 - `redis`: Redis 7 for refresh idempotency
 - `seed`: one-shot idempotent demo database setup
+- `ai`: FastAPI AI sidecar at `http://localhost:8010`
 - `worker`: background refresh worker
 - `ui`: Streamlit frontend at `http://localhost:8501`
 
@@ -176,6 +179,36 @@ Every market endpoint returns a `source_mode` value:
 
 This keeps the product usable in class demos, offline testing, and temporary Yahoo Finance failures.
 
+Stock history supports:
+
+```text
+GET /market/history/{symbol}?range=1d
+GET /market/history/{symbol}?range=5d
+GET /market/history/{symbol}?range=1mo
+GET /market/history/{symbol}?range=ytd
+GET /market/history/{symbol}?range=1y
+```
+
+The Stock Details page exposes these as 1D, 5D, 1M, YTD, and 1Y chart buttons.
+
+## AI Service
+
+AlphaWatch includes a small FastAPI AI sidecar:
+
+```text
+POST /ai/stock-brief
+```
+
+It receives stock context from the Streamlit server, including quote, profile, recent news, and the user's thesis. It returns:
+
+- summary
+- sentiment
+- key takeaways
+- key risks
+- source_mode
+
+The base demo requires no AI secrets. The service returns deterministic `mock` briefs for common symbols like AAPL, MSFT, NVDA, TSLA, AMZN, META, GOOGL, AMD, and PLTR, plus a useful generic brief for unknown symbols.
+
 ## EX3 Enhancement
 
 The implemented enhancement is a weekly markdown stock summary report:
@@ -213,8 +246,15 @@ Market:
 ```text
 GET /market/profile/{symbol}
 GET /market/quote/{symbol}
-GET /market/history/{symbol}
+GET /market/history/{symbol}?range=1mo
 GET /market/news/{symbol}
+```
+
+AI sidecar:
+
+```text
+POST /ai/stock-brief
+GET  /health
 ```
 
 Reports:
@@ -288,6 +328,8 @@ Tests do not depend on real Yahoo Finance calls.
 
 ```text
 ALPHA_WATCH/
+├── ai_service/
+│   └── main.py
 ├── app/
 │   ├── auth.py
 │   ├── auth_routes.py

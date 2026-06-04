@@ -15,6 +15,7 @@ AlphaWatch EX3 local demo
    - FastAPI API on http://127.0.0.1:8000
    - Redis on localhost:6379
    - one-shot seed service for demo data
+   - AI sidecar on http://127.0.0.1:8010
    - background worker
    - Streamlit UI on http://localhost:8501
 
@@ -28,6 +29,8 @@ AlphaWatch EX3 local demo
    - Open Dashboard and confirm the sample watchlist appears.
    - Open Watchlist and add or edit a stock.
    - Open Stock Details for AAPL, MSFT, or NVDA.
+   - Switch the price chart between 1D, 5D, 1M, YTD, and 1Y.
+   - Review the AI Brief sentiment, takeaways, and risks.
    - Confirm quote, profile, history, and news sections load.
    - Check the worker logs in the docker compose terminal.
 
@@ -39,6 +42,7 @@ AlphaWatch EX3 local demo
 
 7. Verify health:
    curl -fsS http://127.0.0.1:8000/openapi.json >/dev/null
+   curl -fsS http://127.0.0.1:8010/health
    curl http://127.0.0.1:8000/docs
    docker compose exec redis redis-cli ping
 

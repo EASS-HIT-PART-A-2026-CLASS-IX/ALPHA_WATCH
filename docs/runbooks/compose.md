@@ -1,6 +1,6 @@
 # Compose Runbook
 
-This runbook verifies the local EX3 stack: FastAPI API, Redis, worker, SQLite persistence, tests, Schemathesis, and the Streamlit dashboard.
+This runbook verifies the local EX3 stack: FastAPI API, Redis, worker, AI sidecar, SQLite persistence, tests, Schemathesis, and the Streamlit dashboard.
 
 ## What Compose Covers
 
@@ -10,6 +10,7 @@ This runbook verifies the local EX3 stack: FastAPI API, Redis, worker, SQLite pe
 - Redis at `localhost:6379`
 - one-shot seed service that initializes the demo account and sample watchlist
 - background worker using the same SQLite volume as the API
+- AI sidecar at `http://localhost:8010`
 - Streamlit UI at `http://localhost:8501`
 
 ## Fresh Clone Setup
@@ -30,7 +31,7 @@ The local CI script runs Python syntax checks, pytest, compose config validation
 
 ## Launch The Stack
 
-Start API, Redis, seed, worker, and UI:
+Start API, Redis, seed, worker, AI, and UI:
 
 ```bash
 docker compose up --build
@@ -42,6 +43,7 @@ Open the app:
 
 - Streamlit UI: `http://localhost:8501`
 - API docs: `http://127.0.0.1:8000/docs`
+- AI health: `http://127.0.0.1:8010/health`
 
 Demo login:
 
@@ -82,6 +84,20 @@ curl -i http://127.0.0.1:8000/openapi.json | sed -n '1,20p'
 ```
 
 AlphaWatch does not currently implement request rate limiting, so no `X-RateLimit-*` headers are expected. If rate limiting is added later, this header check is where those headers should be verified.
+
+## Verify AI Service
+
+```bash
+curl -fsS http://127.0.0.1:8010/health
+```
+
+Expected output:
+
+```json
+{"status":"ok"}
+```
+
+The base demo does not require AI secrets. The AI service returns deterministic mock stock briefs.
 
 ## Verify Redis
 
@@ -134,6 +150,11 @@ Use the demo login after seeding:
 ```text
 demo@alphawatch.local / password123
 ```
+
+On Stock Details, verify:
+
+- the chart range selector changes between 1D, 5D, 1M, YTD, and 1Y
+- the AI Brief section shows summary, sentiment, takeaways, and risks
 
 ## Run Pytest
 

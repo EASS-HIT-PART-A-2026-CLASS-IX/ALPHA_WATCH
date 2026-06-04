@@ -13,8 +13,9 @@ Key design notes:
 """
 import logging
 from datetime import datetime
+from typing import Annotated
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 
 from app.auth import get_current_user
 from app.mock_data import mock_history, mock_news, mock_profile, mock_quote
@@ -30,6 +31,14 @@ from app.schemas import (
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/market", tags=["market"])
+
+HISTORY_RANGES = {
+    "1d": {"period": "1d", "interval": "5m", "response_interval": "5m", "limit": 78},
+    "5d": {"period": "5d", "interval": "30m", "response_interval": "30m", "limit": 65},
+    "1mo": {"period": "1mo", "interval": "1d", "response_interval": "1day", "limit": 30},
+    "ytd": {"period": "ytd", "interval": "1d", "response_interval": "1day", "limit": 260},
+    "1y": {"period": "1y", "interval": "1d", "response_interval": "1day", "limit": 260},
+}
 
 
 def _sym(raw: str) -> str:
@@ -158,11 +167,16 @@ def get_quote(symbol: str, _user: User = Depends(get_current_user)) -> MarketQuo
 # ── History ───────────────────────────────────────────────────────────────────
 
 @router.get("/history/{symbol}", response_model=MarketHistoryRead)
-def get_history(symbol: str, _user: User = Depends(get_current_user)) -> MarketHistoryRead:
+def get_history(
+    symbol: str,
+    range: Annotated[str, Query(pattern="^(1d|5d|1mo|ytd|1y)$")] = "1mo",
+    _user: User = Depends(get_current_user),
+) -> MarketHistoryRead:
     sym = _sym(symbol)
+    config = HISTORY_RANGES[range]
     try:
         ticker = _yf_ticker(sym)
-        hist = ticker.history(period="1mo", auto_adjust=False)
+        hist = ticker.history(period=config["period"], interval=config["interval"], auto_adjust=False)
         if hist is None or hist.empty:
             raise ValueError(f"Empty history for {sym}")
 
@@ -174,22 +188,37 @@ def get_history(symbol: str, _user: User = Depends(get_current_user)) -> MarketH
                 continue
             if close != close:  # NaN
                 continue
-            ts = idx.date().isoformat() if hasattr(idx, "date") else str(idx)[:10]
+            if range in {"1d", "5d"}:
+                ts = idx.isoformat() if hasattr(idx, "isoformat") else str(idx)
+            else:
+                ts = idx.date().isoformat() if hasattr(idx, "date") else str(idx)[:10]
             series.append(HistoryPoint(timestamp=ts, close=round(close, 4)))
 
         if not series:
             raise ValueError(f"No usable history rows for {sym}")
 
-        series = series[-30:]
-        return MarketHistoryRead(symbol=sym, interval="1day", range="30d", series=series, source_mode="live")
+        series = series[-config["limit"]:]
+        return MarketHistoryRead(
+            symbol=sym,
+            interval=config["response_interval"],
+            range=range,
+            series=series,
+            source_mode="live",
+        )
     except Exception as exc:
         logger.warning("History fallback for %s: %r", sym, exc)
-        raw = mock_history(sym)
+        raw = mock_history(sym, range)
         series = [
             HistoryPoint(timestamp=p.get("timestamp") or p.get("date", ""), close=p["close"])
             for p in raw["series"]
         ]
-        return MarketHistoryRead(symbol=sym, interval="1day", range="30d", series=series, source_mode="mock")
+        return MarketHistoryRead(
+            symbol=sym,
+            interval=raw.get("interval", config["interval"]),
+            range=range,
+            series=series,
+            source_mode="mock",
+        )
 
 
 # ── News ──────────────────────────────────────────────────────────────────────

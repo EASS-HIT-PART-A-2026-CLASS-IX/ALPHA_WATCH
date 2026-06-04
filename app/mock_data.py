@@ -8,9 +8,8 @@ Used by market_routes.py when:
 Each function accepts a symbol string and returns a plain dict
 in the same shape as the real API response schemas.
 """
-import math
 import random
-from datetime import date, timedelta
+from datetime import date, datetime, time, timedelta
 
 # ── Per-symbol profiles ───────────────────────────────────────────────────────
 
@@ -180,35 +179,61 @@ def mock_quote(symbol: str) -> dict:
     }
 
 
-def mock_history(symbol: str) -> dict:
+def mock_history(symbol: str, history_range: str = "1mo") -> dict:
     """
-    Generate 30 days of plausible daily close prices using a simple
-    random walk seeded by symbol, so the shape is consistent per symbol.
+    Generate plausible close prices for the selected chart range using a
+    deterministic random walk seeded by symbol and range.
     """
     p = _profile_for(symbol)
     base = p["base_price"]
 
-    rng = random.Random(sum(ord(c) for c in symbol))
+    rng = random.Random(sum(ord(c) for c in f"{symbol}:{history_range}"))
     series = []
-    price = base * 0.90  # start slightly below base so chart trends up a bit
+    price = base * 0.94
     today = date.today()
 
-    trading_days = 0
-    offset = 0
-    while trading_days < 30:
-        day = today - timedelta(days=offset)
-        offset += 1
-        if day.weekday() >= 5:   # skip weekends
-            continue
-        # small random walk ±1.5 %
-        price = round(price * (1 + rng.uniform(-0.015, 0.015)), 2)
-        series.append({"date": day.isoformat(), "close": price})
-        trading_days += 1
-
-    series.reverse()   # oldest first for charting
+    if history_range == "1d":
+        start = datetime.combine(today, time(hour=9, minute=30))
+        for i in range(78):
+            timestamp = start + timedelta(minutes=5 * i)
+            price = round(price * (1 + rng.uniform(-0.0025, 0.0025)), 2)
+            series.append({"timestamp": timestamp.isoformat(), "close": price})
+        interval = "5m"
+    elif history_range == "5d":
+        trading_days = []
+        offset = 0
+        while len(trading_days) < 5:
+            day = today - timedelta(days=offset)
+            offset += 1
+            if day.weekday() < 5:
+                trading_days.append(day)
+        for day in reversed(trading_days):
+            start = datetime.combine(day, time(hour=10))
+            for i in range(13):
+                timestamp = start + timedelta(minutes=30 * i)
+                price = round(price * (1 + rng.uniform(-0.004, 0.004)), 2)
+                series.append({"timestamp": timestamp.isoformat(), "close": price})
+        interval = "30m"
+    else:
+        target_points = {"1mo": 30, "ytd": min(260, max(30, today.timetuple().tm_yday)), "1y": 260}.get(history_range, 30)
+        trading_days = 0
+        offset = 0
+        while trading_days < target_points:
+            day = today - timedelta(days=offset)
+            offset += 1
+            if day.weekday() >= 5:
+                continue
+            drift = {"1mo": 0.001, "ytd": 0.0006, "1y": 0.0004}.get(history_range, 0.001)
+            price = round(price * (1 + drift + rng.uniform(-0.014, 0.014)), 2)
+            series.append({"date": day.isoformat(), "close": price})
+            trading_days += 1
+        series.reverse()
+        interval = "1day"
 
     return {
         "symbol": symbol,
+        "interval": interval,
+        "range": history_range,
         "series": series,
         "source_mode": "mock",
     }

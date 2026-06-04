@@ -100,9 +100,11 @@ class FakeTicker:
             raise RuntimeError("simulated yfinance error")
         return FakeFastInfo(empty=self._fast_empty)
 
-    def history(self, period="1mo", auto_adjust=False):
+    def history(self, period="1mo", interval="1d", auto_adjust=False):
         if "history" in self._raise_on:
             raise RuntimeError("simulated yfinance error")
+        self.period = period
+        self.interval = interval
         return FakeHistory(self._history_rows)
 
     @property
@@ -235,6 +237,48 @@ def test_history_live_returns_ascending_series(client: TestClient, monkeypatch: 
     assert len(d["series"]) == 3
     assert d["series"][0]["timestamp"] == "2024-01-01"
     assert d["series"][0]["close"] == pytest.approx(182.00)
+
+
+def test_history_range_1d_uses_intraday_interval(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    seen = {}
+
+    class RangeTicker(FakeTicker):
+        def history(self, period="1mo", interval="1d", auto_adjust=False):
+            seen["period"] = period
+            seen["interval"] = interval
+            return super().history(period=period, interval=interval, auto_adjust=auto_adjust)
+
+    monkeypatch.setattr("app.market_routes._yf_ticker", lambda sym: RangeTicker(sym))
+    token = register_and_login(client)
+    resp = client.get("/market/history/AAPL?range=1d", headers=auth(token))
+
+    assert resp.status_code == 200
+    d = resp.json()
+    assert d["range"] == "1d"
+    assert d["interval"] == "5m"
+    assert seen == {"period": "1d", "interval": "5m"}
+
+
+@pytest.mark.parametrize(
+    ("requested_range", "expected_min_points"),
+    [("1d", 60), ("5d", 50), ("1mo", 30), ("ytd", 30), ("1y", 200)],
+)
+def test_history_fallback_respects_requested_range(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    requested_range: str,
+    expected_min_points: int,
+) -> None:
+    _patch_yf(monkeypatch, raise_on={"history"})
+    token = register_and_login(client)
+    resp = client.get(f"/market/history/AAPL?range={requested_range}", headers=auth(token))
+
+    assert resp.status_code == 200
+    d = resp.json()
+    assert d["source_mode"] == "mock"
+    assert d["range"] == requested_range
+    assert len(d["series"]) >= expected_min_points
+    assert all(p["close"] > 0 for p in d["series"])
 
 
 def test_history_fallback_returns_30_points(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:

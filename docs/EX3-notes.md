@@ -7,12 +7,13 @@ AlphaWatch remains the same stock dashboard product:
 - FastAPI serves auth, watchlist CRUD, market data, and reports.
 - SQLite stores users, stocks, and refresh snapshots.
 - Streamlit remains the local dashboard UI.
+- A small AI FastAPI sidecar provides deterministic stock briefs for the Stock Details page.
 - Yahoo Finance through `yfinance` is still the live data provider.
 - Built-in mock data still keeps market endpoints usable when Yahoo Finance is slow or unreachable.
 
 EX3 adds a small infrastructure layer around the existing product:
 
-- `compose.yaml` starts API, Redis, seed, worker, and Streamlit UI.
+- `compose.yaml` starts API, Redis, seed, worker, AI, and Streamlit UI.
 - Redis coordinates refresh idempotency.
 - `app.worker` refreshes saved stock data in the background.
 - `scripts/refresh.py` lets a student or grader run the same refresh flow manually.
@@ -20,6 +21,7 @@ EX3 adds a small infrastructure layer around the existing product:
 - `scripts/local_ci.sh` gives a local CI-equivalent verification path.
 - `scripts/schemathesis.sh` runs a small OpenAPI contract check against the live API.
 - `/reports/weekly` is the documented EX3 enhancement.
+- Stock Details includes a 1D / 5D / 1M / YTD / 1Y chart selector.
 
 ## Services
 
@@ -38,6 +40,18 @@ Health is verified through:
 ```bash
 curl -fsS http://127.0.0.1:8000/openapi.json >/dev/null
 ```
+
+The market history endpoint accepts a range query parameter:
+
+```text
+GET /market/history/{symbol}?range=1d
+GET /market/history/{symbol}?range=5d
+GET /market/history/{symbol}?range=1mo
+GET /market/history/{symbol}?range=ytd
+GET /market/history/{symbol}?range=1y
+```
+
+Yahoo Finance is used when available. If live history is unavailable, AlphaWatch returns deterministic mock data shaped for the selected timeframe.
 
 ### Seed
 
@@ -75,7 +89,7 @@ Every `WORKER_REFRESH_INTERVAL_SECONDS` seconds, it loads distinct saved stock s
 
 - profile
 - quote
-- 30-day history
+- default 1M history
 - news
 
 Each successful refresh writes a `MarketSnapshot` row. Failed refreshes write an error snapshot so the failure is visible during local debugging.
@@ -88,7 +102,33 @@ The `ui` service runs:
 streamlit run ui/streamlit_app.py --server.address=0.0.0.0 --server.port=8501 --server.headless=true
 ```
 
-Inside Compose, Streamlit uses `API_BASE_URL=http://api:8000`. Outside Compose, it still defaults to `http://127.0.0.1:8000`.
+Inside Compose, Streamlit uses `API_BASE_URL=http://api:8000` and `AI_SERVICE_URL=http://ai:8010`. Outside Compose, it still defaults to `http://127.0.0.1:8000` and `http://127.0.0.1:8010`.
+
+### AI
+
+The `ai` service runs:
+
+```bash
+uvicorn ai_service.main:app --host 0.0.0.0 --port 8010
+```
+
+It exposes:
+
+```text
+POST /ai/stock-brief
+GET  /health
+```
+
+The service receives stock context from the Streamlit server and returns structured JSON:
+
+- symbol
+- summary
+- sentiment
+- key takeaways
+- key risks
+- source_mode
+
+No AI provider key is required. The base demo uses deterministic `mock` briefs for common symbols and a generic fallback for unknown symbols.
 
 ## Auth And Security
 
